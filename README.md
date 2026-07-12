@@ -19,6 +19,8 @@ cp include/secrets.example.h include/secrets.h
 
 `include/secrets.h` はGitの管理対象外です。
 
+起動時にWi-Fiへ接続した後、NTPサーバーから時刻を取得します。時刻は日本標準時（JST）で液晶とシリアルモニターに表示されます。
+
 ## ビルド
 
 ```sh

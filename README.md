@@ -9,6 +9,16 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
+## Wi-Fi設定
+
+サンプルをコピーして、接続先のSSIDとパスワードを設定します。
+
+```sh
+cp include/secrets.example.h include/secrets.h
+```
+
+`include/secrets.h` はGitの管理対象外です。
+
 ## ビルド
 
 ```sh

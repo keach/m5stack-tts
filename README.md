@@ -23,6 +23,17 @@ cp include/secrets.example.h include/secrets.h
 
 現在の天気、気温、湿度、気圧、直近1時間の雨量は起動時と10分ごとにOpenWeatherから取得します。ボタンAを押すと手動更新できます。
 
+## SDカード
+
+FAT32でフォーマットしたmicroSDカードを電源投入前に挿入してください。カードが認識されると、天気情報の取得成功時に `/weather.csv` へ次の形式で追記します。
+
+```csv
+datetime,weather,temp_c,humidity_pct,pressure_hpa,rain_1h_mm
+2026-07-13 12:00:00,Clouds,28.4,72,1008,0.0
+```
+
+SDカードがない場合や初期化に失敗した場合も、時計と天気表示は継続します。
+
 ## ビルド
 
 ```sh

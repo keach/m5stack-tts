@@ -2,6 +2,8 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <M5Stack.h>
+#include <SD.h>
+#include <SPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
@@ -19,6 +21,12 @@ constexpr unsigned long WEATHER_UPDATE_INTERVAL_MS = 10UL * 60UL * 1000UL;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
 constexpr char WEATHER_API_URL[] =
     "https://api.openweathermap.org/data/2.5/weather";
+constexpr int SD_CS_PIN = 4;
+constexpr int SD_SCK_PIN = 18;
+constexpr int SD_MISO_PIN = 19;
+constexpr int SD_MOSI_PIN = 23;
+constexpr uint32_t SD_FREQUENCY_HZ = 25000000;
+constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 
 struct WeatherData {
   char condition[32] = "--";
@@ -32,6 +40,63 @@ struct WeatherData {
 WeatherData weather;
 unsigned long lastWeatherAttempt = 0;
 unsigned long lastDisplayUpdate = 0;
+bool storageAvailable = false;
+
+bool initializeStorage() {
+  SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+  if (!SD.begin(SD_CS_PIN, SPI, SD_FREQUENCY_HZ)) {
+    Serial.println("SD card initialization failed. Logging is disabled.");
+    return false;
+  }
+  if (SD.cardType() == CARD_NONE) {
+    Serial.println("SD card not detected. Logging is disabled.");
+    return false;
+  }
+
+  const uint64_t capacityMb = SD.cardSize() / (1024ULL * 1024ULL);
+  Serial.printf("SD card ready. Capacity: %llu MB\n", capacityMb);
+  return true;
+}
+
+bool appendWeatherLog(const WeatherData& data) {
+  if (!storageAvailable) {
+    return false;
+  }
+
+  const bool needsHeader = !SD.exists(WEATHER_LOG_PATH);
+  File file = SD.open(WEATHER_LOG_PATH, FILE_APPEND);
+  if (!file) {
+    Serial.println("Failed to open weather.csv. Logging is disabled.");
+    storageAvailable = false;
+    return false;
+  }
+
+  if (needsHeader) {
+    file.println(
+        "datetime,weather,temp_c,humidity_pct,pressure_hpa,rain_1h_mm");
+  }
+
+  tm timeInfo = {};
+  char formattedTime[20] = "unknown";
+  if (getLocalTime(&timeInfo, 10)) {
+    strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S",
+             &timeInfo);
+  }
+
+  const size_t written =
+      file.printf("%s,%s,%.1f,%d,%d,%.1f\n", formattedTime, data.condition,
+                  data.temperature, data.humidity, data.pressure,
+                  data.rainLastHour);
+  file.close();
+
+  if (written == 0) {
+    Serial.println("Failed to write weather data to the SD card.");
+    return false;
+  }
+
+  Serial.printf("Weather data appended to %s.\n", WEATHER_LOG_PATH);
+  return true;
+}
 
 void connectToWiFi() {
   M5.Lcd.setCursor(20, 100);
@@ -200,13 +265,16 @@ bool fetchWeather() {
   Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
                 weather.condition, weather.temperature, weather.humidity,
                 weather.pressure, weather.rainLastHour);
+  appendWeatherLog(weather);
   drawWeather();
   return true;
 }
 }  // namespace
 
 void setup() {
-  M5.begin();
+  // Initialize the display and serial port here; SD is initialized separately
+  // so that card detection and errors can be handled explicitly.
+  M5.begin(true, false, true);
   Serial.begin(115200);
 
   M5.Lcd.setTextSize(2);
@@ -216,6 +284,7 @@ void setup() {
   M5.Lcd.setCursor(20, 70);
   M5.Lcd.println("PlatformIO ready!");
 
+  storageAvailable = initializeStorage();
   connectToWiFi();
   syncTimeWithNtp();
   drawDateTime();

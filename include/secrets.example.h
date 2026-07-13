@@ -4,6 +4,7 @@
 constexpr char WIFI_SSID[] = "your-ssid";
 constexpr char WIFI_PASSWORD[] = "your-password";
 constexpr char OPENWEATHER_API_KEY[] = "your-api-key";
+constexpr char AQUESTALK_LICENSE_KEY[] = "";
 
 // Coordinates of the location whose weather should be displayed.
 constexpr float WEATHER_LATITUDE = 35.6812F;

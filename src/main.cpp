@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "secrets.h"
+#include "SpeechService.h"
 
 namespace {
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
@@ -42,6 +43,8 @@ WeatherData weather;
 unsigned long lastWeatherAttempt = 0;
 unsigned long lastDisplayUpdate = 0;
 bool storageAvailable = false;
+SpeechService speech;
+bool speechAvailable = false;
 
 bool initializeStorage() {
   SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
@@ -198,7 +201,7 @@ void drawWeather() {
     M5.Lcd.println("Weather unavailable");
     M5.Lcd.setCursor(16, 214);
     M5.Lcd.setTextSize(1);
-    M5.Lcd.println("Btn A: refresh now");
+    M5.Lcd.println("A: refresh  B: speak  C: stop");
     return;
   }
 
@@ -214,7 +217,53 @@ void drawWeather() {
   M5.Lcd.printf("Rain 1h : %.1f mm", weather.rainLastHour);
   M5.Lcd.setCursor(16, 222);
   M5.Lcd.setTextSize(1);
-  M5.Lcd.print("Updates every 10 min / Btn A: refresh");
+  M5.Lcd.print("A: refresh  B: speak  C: stop");
+}
+
+const char* weatherConditionInJapanese(const char* condition) {
+  if (strcmp(condition, "Clear") == 0) return "晴れ";
+  if (strcmp(condition, "Clouds") == 0) return "曇り";
+  if (strcmp(condition, "Rain") == 0) return "雨";
+  if (strcmp(condition, "Drizzle") == 0) return "小雨";
+  if (strcmp(condition, "Thunderstorm") == 0) return "雷雨";
+  if (strcmp(condition, "Snow") == 0) return "雪";
+  if (strcmp(condition, "Mist") == 0 || strcmp(condition, "Fog") == 0 ||
+      strcmp(condition, "Haze") == 0) {
+    return "霧";
+  }
+  return "不明";
+}
+
+void speakCurrentWeather() {
+  if (!speechAvailable) {
+    Serial.println("Speech service is unavailable.");
+    return;
+  }
+  if (!weather.valid) {
+    speech.speak("音声合成のテストです。");
+    return;
+  }
+
+  tm timeInfo = {};
+  char dateTimeText[96] = "現在時刻は取得できません。";
+  if (getLocalTime(&timeInfo, 10)) {
+    snprintf(dateTimeText, sizeof(dateTimeText),
+             "現在は%d年%d月%d日、%d時%d分です。", timeInfo.tm_year + 1900,
+             timeInfo.tm_mon + 1, timeInfo.tm_mday, timeInfo.tm_hour,
+             timeInfo.tm_min);
+  }
+
+  char message[384];
+  snprintf(message, sizeof(message),
+           "%s現在の天気は%sです。気温は%.1f度、湿度は%dパーセント、"
+           "気圧は%dヘクトパスカル、1時間雨量は%.1fミリです。",
+           dateTimeText, weatherConditionInJapanese(weather.condition),
+           weather.temperature, weather.humidity, weather.pressure,
+           weather.rainLastHour);
+  Serial.printf("Speaking: %s\n", message);
+  if (!speech.speak(message)) {
+    Serial.println("Failed to start speech.");
+  }
 }
 
 bool fetchWeather() {
@@ -286,6 +335,7 @@ void setup() {
   M5.Lcd.println("PlatformIO ready!");
 
   storageAvailable = initializeStorage();
+  speechAvailable = storageAvailable && speech.begin();
   connectToWiFi();
   syncTimeWithNtp();
   drawDateTime();
@@ -298,6 +348,12 @@ void loop() {
 
   if (M5.BtnA.wasPressed()) {
     fetchWeather();
+  }
+  if (M5.BtnB.wasPressed()) {
+    speakCurrentWeather();
+  }
+  if (M5.BtnC.wasPressed()) {
+    speech.stop();
   }
 
   const unsigned long now = millis();

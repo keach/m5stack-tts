@@ -6,6 +6,7 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <aquestalk.h>
 #include <time.h>
 
 #include "secrets.h"

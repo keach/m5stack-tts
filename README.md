@@ -34,6 +34,18 @@ datetime,weather,temp_c,humidity_pct,pressure_hpa,rain_1h_mm
 
 SDカードがない場合や初期化に失敗した場合も、時計と天気表示は継続します。
 
+## AquesTalk ESP32 SDK
+
+AquesTalk ESP32 Small辞書版2.4.4の評価版SDKは、再配布条件に従ってGit管理対象外の `vendor/aquestalk/aquestalk-esp32_s` に配置します。PlatformIOはこのローカルSDKを `lib_extra_dirs` から読み込みます。
+
+漢字かな混じり文を音声合成するには、`sdcard` ディレクトリの内容をmicroSDカードのルートへコピーしてください。実機上の辞書パスは次のとおりです。
+
+```text
+/aq_dic/aqdic_m.bin
+```
+
+評価版には発音制限があります。継続的な開発や製品版としての利用には、AQUESTの使用ライセンスが必要です。
+
 ## ビルド
 
 ```sh

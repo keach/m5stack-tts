@@ -9,6 +9,7 @@ class SpeechService {
  public:
   bool begin();
   bool speak(const char* utf8Text, int speed = 100);
+  bool playAlertTone();
   void stop();
   bool isSpeaking() const;
 
@@ -24,4 +25,3 @@ class SpeechService {
   volatile bool stopRequested_ = false;
   bool initialized_ = false;
 };
-

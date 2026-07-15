@@ -11,6 +11,7 @@
 
 #include "secrets.h"
 #include "SpeechService.h"
+#include "TemperatureAlertService.h"
 
 namespace {
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
@@ -45,6 +46,7 @@ unsigned long lastDisplayUpdate = 0;
 bool storageAvailable = false;
 SpeechService speech;
 bool speechAvailable = false;
+TemperatureAlertService temperatureAlerts;
 
 bool initializeStorage() {
   SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
@@ -191,9 +193,18 @@ void drawDateTime() {
 void drawWeather() {
   M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+  const int temperatureAlert =
+      weather.valid ? temperatureAlerts.activeThreshold(weather.temperature) : 0;
+  M5.Lcd.setTextColor(temperatureAlert >= 35 ? TFT_RED
+                                             : temperatureAlert >= 30 ? TFT_ORANGE
+                                                                      : TFT_CYAN,
+                      TFT_BLACK);
   M5.Lcd.setCursor(16, 44);
-  M5.Lcd.println("CURRENT WEATHER");
+  if (temperatureAlert > 0) {
+    M5.Lcd.printf("HIGH TEMP ALERT: %d C", temperatureAlert);
+  } else {
+    M5.Lcd.println("CURRENT WEATHER");
+  }
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
   if (!weather.valid) {
@@ -312,6 +323,12 @@ bool fetchWeather() {
   weather.valid = true;
   http.end();
 
+  tm localTime = {};
+  const bool timeAvailable = getLocalTime(&localTime, 10);
+  const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
+  temperatureAlerts.evaluate(weather.temperature,
+                             speechAvailable && !quietHours, speech);
+
   Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
                 weather.condition, weather.temperature, weather.humidity,
                 weather.pressure, weather.rainLastHour);
@@ -336,6 +353,7 @@ void setup() {
 
   storageAvailable = initializeStorage();
   speechAvailable = storageAvailable && speech.begin();
+  temperatureAlerts.begin();
   connectToWiFi();
   syncTimeWithNtp();
   drawDateTime();

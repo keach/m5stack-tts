@@ -152,6 +152,56 @@ bool SpeechService::speak(const char* utf8Text, int speed) {
   return true;
 }
 
+bool SpeechService::playAlertTone() {
+  if (!initialized_) {
+    return false;
+  }
+
+  stop();
+  constexpr int FREQUENCY_HZ = 880;
+  constexpr int BEEP_DURATION_MS = 180;
+  constexpr int GAP_DURATION_MS = 120;
+  constexpr int BEEP_COUNT = 3;
+  constexpr int16_t AMPLITUDE = 12000;
+  constexpr size_t CHUNK_SAMPLES = 128;
+  uint16_t output[CHUNK_SAMPLES * 2];
+  uint32_t phase = 0;
+  bool high = true;
+
+  auto writeLevel = [&](int sampleCount, int16_t amplitude) {
+    while (sampleCount > 0) {
+      const size_t count = min(static_cast<size_t>(sampleCount), CHUNK_SAMPLES);
+      for (size_t index = 0; index < count; ++index) {
+        int16_t signedSample = amplitude;
+        if (amplitude != 0) {
+          signedSample = high ? amplitude : -amplitude;
+          phase += FREQUENCY_HZ * 2;
+          if (phase >= AUDIO_SAMPLE_RATE) {
+            phase -= AUDIO_SAMPLE_RATE;
+            high = !high;
+          }
+        }
+        const uint16_t sample = static_cast<uint16_t>(signedSample) ^ 0x8000U;
+        output[index * 2] = sample;
+        output[index * 2 + 1] = sample;
+      }
+      size_t bytesWritten = 0;
+      i2s_write(I2S_PORT, output, count * 2 * sizeof(uint16_t), &bytesWritten,
+                portMAX_DELAY);
+      sampleCount -= count;
+    }
+  };
+
+  for (int beep = 0; beep < BEEP_COUNT; ++beep) {
+    writeLevel(AUDIO_SAMPLE_RATE * BEEP_DURATION_MS / 1000, AMPLITUDE);
+    if (beep + 1 < BEEP_COUNT) {
+      writeLevel(AUDIO_SAMPLE_RATE * GAP_DURATION_MS / 1000, 0);
+    }
+  }
+  i2s_zero_dma_buffer(I2S_PORT);
+  return true;
+}
+
 void SpeechService::stop() {
   if (!speaking_) {
     return;
@@ -200,4 +250,3 @@ void SpeechService::runTask() {
     speaking_ = false;
   }
 }
-

@@ -7,3 +7,4 @@ sdcard/aq_dic/aqdic_m.bin
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/
+.vscode/extensions.json

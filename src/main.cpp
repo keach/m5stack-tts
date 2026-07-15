@@ -22,6 +22,7 @@ constexpr char NTP_SERVER_PRIMARY[] = "ntp.nict.jp";
 constexpr char NTP_SERVER_SECONDARY[] = "pool.ntp.org";
 constexpr unsigned long WEATHER_UPDATE_INTERVAL_MS = 10UL * 60UL * 1000UL;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
+constexpr unsigned long SPLASH_DURATION_MS = 3000;
 constexpr char WEATHER_API_URL[] =
     "https://api.openweathermap.org/data/2.5/weather";
 constexpr int SD_CS_PIN = 4;
@@ -47,6 +48,44 @@ bool storageAvailable = false;
 SpeechService speech;
 bool speechAvailable = false;
 TemperatureAlertService temperatureAlerts;
+
+void showSplashScreen() {
+  M5.Lcd.fillScreen(TFT_NAVY);
+  M5.Lcd.drawRect(8, 8, 304, 224, TFT_CYAN);
+  M5.Lcd.drawRect(12, 12, 296, 216, TFT_DARKCYAN);
+
+  M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(28, 48);
+  M5.Lcd.println("M5 WEATHER TTS");
+
+  M5.Lcd.drawFastHLine(28, 88, 264, TFT_DARKCYAN);
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(32, 108);
+  M5.Lcd.println("Weather monitor");
+  M5.Lcd.setCursor(32, 134);
+  M5.Lcd.println("and voice alerts");
+
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_NAVY);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setCursor(112, 184);
+  M5.Lcd.println("Initializing...");
+  M5.Lcd.setCursor(116, 210);
+  M5.Lcd.println("M5Stack Basic");
+
+  const unsigned long startedAt = millis();
+  while (millis() - startedAt < SPLASH_DURATION_MS) {
+    M5.update();
+    delay(10);
+  }
+
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(20, 40);
+  M5.Lcd.println("Starting services...");
+}
 
 bool initializeStorage() {
   SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
@@ -344,12 +383,7 @@ void setup() {
   M5.begin(true, false, true);
   Serial.begin(115200);
 
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setCursor(20, 40);
-  M5.Lcd.println("M5Stack Basic");
-  M5.Lcd.setCursor(20, 70);
-  M5.Lcd.println("PlatformIO ready!");
+  showSplashScreen();
 
   storageAvailable = initializeStorage();
   speechAvailable = storageAvailable && speech.begin();

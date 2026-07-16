@@ -1,4 +1,5 @@
 .pio/
+.pio-core/
 .venv/
 include/secrets.h
 vendor/aquestalk/

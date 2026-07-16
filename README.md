@@ -38,6 +38,8 @@ M5Stack Basic（ESP32）向けのPlatformIOプロジェクトです。
 
 Python 3.10以上を使用してください。
 
+このプロジェクトでは、他のPlatformIOプロジェクトとフレームワークやツールチェーンが衝突しないよう、PlatformIO Coreの保存先をプロジェクト専用の `.pio-core` に分離しています。このディレクトリはGit管理対象外で、初回ビルド時に必要なパッケージがダウンロードされます。
+
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt

@@ -21,6 +21,8 @@ constexpr unsigned long NTP_TIMEOUT_MS = 15000;
 constexpr char NTP_SERVER_PRIMARY[] = "ntp.nict.jp";
 constexpr char NTP_SERVER_SECONDARY[] = "pool.ntp.org";
 constexpr unsigned long WEATHER_UPDATE_INTERVAL_MS = 10UL * 60UL * 1000UL;
+constexpr unsigned long MANUAL_WEATHER_MIN_INTERVAL_MS = 30UL * 1000UL;
+constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
 constexpr unsigned long SPLASH_DURATION_MS = 3000;
 constexpr char WEATHER_API_URL[] =
@@ -41,9 +43,18 @@ struct WeatherData {
   bool valid = false;
 };
 
+enum class WeatherRequestSource {
+  Startup,
+  ManualButton,
+  Scheduled,
+};
+
 WeatherData weather;
 unsigned long lastWeatherAttempt = 0;
+bool weatherAttempted = false;
 unsigned long lastDisplayUpdate = 0;
+unsigned long buttonAPressDetectedAt = 0;
+bool buttonAConfirmationPending = false;
 bool storageAvailable = false;
 SpeechService speech;
 bool speechAvailable = false;
@@ -316,8 +327,35 @@ void speakCurrentWeather() {
   }
 }
 
-bool fetchWeather() {
-  lastWeatherAttempt = millis();
+const char* weatherRequestSourceName(WeatherRequestSource source) {
+  switch (source) {
+    case WeatherRequestSource::Startup:
+      return "startup";
+    case WeatherRequestSource::ManualButton:
+      return "button A";
+    case WeatherRequestSource::Scheduled:
+      return "timer";
+  }
+  return "unknown";
+}
+
+bool fetchWeather(WeatherRequestSource source) {
+  const unsigned long now = millis();
+  if (source == WeatherRequestSource::ManualButton && weatherAttempted &&
+      now - lastWeatherAttempt < MANUAL_WEATHER_MIN_INTERVAL_MS) {
+    const unsigned long remainingSeconds =
+        (MANUAL_WEATHER_MIN_INTERVAL_MS - (now - lastWeatherAttempt) + 999) /
+        1000;
+    Serial.printf(
+        "Weather request from button A ignored; retry in %lu seconds.\n",
+        remainingSeconds);
+    return false;
+  }
+
+  lastWeatherAttempt = now;
+  weatherAttempted = true;
+  Serial.printf("Weather request source: %s.\n",
+                weatherRequestSourceName(source));
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Weather update skipped because Wi-Fi is disconnected.");
     return false;
@@ -392,14 +430,27 @@ void setup() {
   syncTimeWithNtp();
   drawDateTime();
   drawWeather();
-  fetchWeather();
+  fetchWeather(WeatherRequestSource::Startup);
 }
 
 void loop() {
   M5.update();
 
   if (M5.BtnA.wasPressed()) {
-    fetchWeather();
+    buttonAPressDetectedAt = millis();
+    buttonAConfirmationPending = true;
+    Serial.printf("Button A signal detected (raw pin: %d).\n",
+                  digitalRead(BUTTON_A_PIN));
+  }
+  if (buttonAConfirmationPending) {
+    if (M5.BtnA.isReleased()) {
+      buttonAConfirmationPending = false;
+      Serial.println("Button A signal rejected as too short.");
+    } else if (millis() - buttonAPressDetectedAt >= BUTTON_CONFIRMATION_MS) {
+      buttonAConfirmationPending = false;
+      Serial.println("Button A press confirmed.");
+      fetchWeather(WeatherRequestSource::ManualButton);
+    }
   }
   if (M5.BtnB.wasPressed()) {
     speakCurrentWeather();
@@ -410,7 +461,7 @@ void loop() {
 
   const unsigned long now = millis();
   if (now - lastWeatherAttempt >= WEATHER_UPDATE_INTERVAL_MS) {
-    fetchWeather();
+    fetchWeather(WeatherRequestSource::Scheduled);
   }
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL_MS) {
     lastDisplayUpdate = now;

@@ -172,7 +172,7 @@ bool SpeechService::playAlertTone() {
     while (sampleCount > 0) {
       const size_t count = min(static_cast<size_t>(sampleCount), CHUNK_SAMPLES);
       for (size_t index = 0; index < count; ++index) {
-        int16_t signedSample = amplitude;
+        int16_t signedSample = 0;
         if (amplitude != 0) {
           signedSample = high ? amplitude : -amplitude;
           phase += FREQUENCY_HZ * 2;
@@ -181,6 +181,7 @@ bool SpeechService::playAlertTone() {
             high = !high;
           }
         }
+        signedSample = applyVolume(signedSample);
         const uint16_t sample = static_cast<uint16_t>(signedSample) ^ 0x8000U;
         output[index * 2] = sample;
         output[index * 2 + 1] = sample;
@@ -214,6 +215,17 @@ void SpeechService::stop() {
 
 bool SpeechService::isSpeaking() const { return speaking_; }
 
+void SpeechService::setVolumePercent(uint8_t volumePercent) {
+  volumePercent_ = min(volumePercent, static_cast<uint8_t>(100));
+}
+
+uint8_t SpeechService::volumePercent() const { return volumePercent_; }
+
+int16_t SpeechService::applyVolume(int16_t sample) const {
+  return static_cast<int16_t>(static_cast<int32_t>(sample) * volumePercent_ /
+                              100);
+}
+
 void SpeechService::taskEntry(void* argument) {
   static_cast<SpeechService*>(argument)->runTask();
 }
@@ -235,8 +247,8 @@ void SpeechService::runTask() {
         int16_t upsampled[3];
         AqResample_Conv(pcm[index], upsampled);
         for (int sampleIndex = 0; sampleIndex < 3; ++sampleIndex) {
-          const uint16_t sample =
-              static_cast<uint16_t>(upsampled[sampleIndex]) ^ 0x8000U;
+          const int16_t scaledSample = applyVolume(upsampled[sampleIndex]);
+          const uint16_t sample = static_cast<uint16_t>(scaledSample) ^ 0x8000U;
           dacSamples[outputIndex++] = sample;
           dacSamples[outputIndex++] = sample;
         }

@@ -49,12 +49,18 @@ enum class WeatherRequestSource {
   Scheduled,
 };
 
+enum class ClockDisplayPrecision {
+  Minutes,
+  Seconds,
+};
+
 WeatherData weather;
 unsigned long lastWeatherAttempt = 0;
 bool weatherAttempted = false;
 unsigned long lastDisplayUpdate = 0;
 unsigned long buttonAPressDetectedAt = 0;
 bool buttonAConfirmationPending = false;
+ClockDisplayPrecision clockDisplayPrecision = ClockDisplayPrecision::Minutes;
 bool storageAvailable = false;
 SpeechService speech;
 bool speechAvailable = false;
@@ -226,16 +232,32 @@ void syncTimeWithNtp() {
 
 void drawDateTime() {
   tm timeInfo = {};
-  char formattedTime[24] = "Time unavailable";
+  char formattedTime[32] = "Time unavailable";
   if (getLocalTime(&timeInfo, 10)) {
-    strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S",
-             &timeInfo);
+    constexpr const char* WEEKDAYS[] = {"Sun", "Mon", "Tue", "Wed",
+                                        "Thu", "Fri", "Sat"};
+    const char* weekday =
+        timeInfo.tm_wday >= 0 && timeInfo.tm_wday < 7
+            ? WEEKDAYS[timeInfo.tm_wday]
+            : "---";
+    if (clockDisplayPrecision == ClockDisplayPrecision::Seconds) {
+      snprintf(formattedTime, sizeof(formattedTime),
+               "%04d.%02d.%02d. %s %02d:%02d:%02d", timeInfo.tm_year + 1900,
+               timeInfo.tm_mon + 1, timeInfo.tm_mday, weekday,
+               timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
+    } else {
+      snprintf(formattedTime, sizeof(formattedTime),
+               "%04d.%02d.%02d. %s %02d:%02d", timeInfo.tm_year + 1900,
+               timeInfo.tm_mon + 1, timeInfo.tm_mday, weekday,
+               timeInfo.tm_hour, timeInfo.tm_min);
+    }
   }
 
   M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(38, 8);
+  const int textWidth = M5.Lcd.textWidth(formattedTime);
+  M5.Lcd.setCursor(max(0, (320 - textWidth) / 2), 8);
   M5.Lcd.print(formattedTime);
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 }

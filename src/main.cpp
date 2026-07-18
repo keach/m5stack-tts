@@ -11,6 +11,7 @@
 
 #include "secrets.h"
 #include "AppSettings.h"
+#include "RainAlertService.h"
 #include "SettingsMode.h"
 #include "SpeechService.h"
 #include "TemperatureAlertService.h"
@@ -65,6 +66,7 @@ SettingsMode settingsMode;
 SpeechService speech;
 bool speechAvailable = false;
 TemperatureAlertService temperatureAlerts;
+RainAlertService rainAlerts;
 
 bool showSplashScreen() {
   M5.Lcd.fillScreen(TFT_NAVY);
@@ -293,6 +295,8 @@ void drawWeather() {
   M5.Lcd.setCursor(16, 44);
   if (temperatureAlert > 0) {
     M5.Lcd.printf("HIGH TEMP ALERT: %d C", temperatureAlert);
+  } else if (weather.valid && rainAlerts.isRainActive()) {
+    M5.Lcd.printf("RAIN ALERT: %.1f mm", weather.rainLastHour);
   } else {
     M5.Lcd.println("CURRENT WEATHER");
   }
@@ -334,6 +338,11 @@ const char* weatherConditionInJapanese(const char* condition) {
     return "霧";
   }
   return "不明";
+}
+
+bool isRainingCondition(const char* condition) {
+  return strcmp(condition, "Rain") == 0 || strcmp(condition, "Drizzle") == 0 ||
+         strcmp(condition, "Thunderstorm") == 0;
 }
 
 void speakCurrentWeather() {
@@ -444,8 +453,12 @@ bool fetchWeather(WeatherRequestSource source) {
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
-  temperatureAlerts.evaluate(weather.temperature,
-                             speechAvailable && !quietHours, speech);
+  const bool temperatureAudioPlayed = temperatureAlerts.evaluate(
+      weather.temperature, speechAvailable && !quietHours, speech);
+  rainAlerts.evaluate(isRainingCondition(weather.condition), weather.condition,
+                      weather.rainLastHour,
+                      speechAvailable && !quietHours && !temperatureAudioPlayed,
+                      speech);
 
   Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
                 weather.condition, weather.temperature, weather.humidity,
@@ -470,6 +483,7 @@ void setup() {
   storageAvailable = initializeStorage();
   speechAvailable = storageAvailable && speech.begin();
   temperatureAlerts.begin();
+  rainAlerts.begin();
   connectToWiFi();
   syncTimeWithNtp();
   drawDateTime();

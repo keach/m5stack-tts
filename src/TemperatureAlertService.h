@@ -8,7 +8,7 @@
 class TemperatureAlertService {
  public:
   void begin();
-  void evaluate(float temperature, bool audioAllowed, SpeechService& speech);
+  bool evaluate(float temperature, bool audioAllowed, SpeechService& speech);
   int activeThreshold(float temperature) const;
 
  private:
@@ -32,4 +32,3 @@ class TemperatureAlertService {
   };
   Preferences preferences_;
 };
-

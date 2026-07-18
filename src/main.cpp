@@ -10,6 +10,8 @@
 #include <time.h>
 
 #include "secrets.h"
+#include "AppSettings.h"
+#include "SettingsMode.h"
 #include "SpeechService.h"
 #include "TemperatureAlertService.h"
 
@@ -25,6 +27,7 @@ constexpr unsigned long MANUAL_WEATHER_MIN_INTERVAL_MS = 30UL * 1000UL;
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
 constexpr unsigned long SPLASH_DURATION_MS = 3000;
+constexpr unsigned long SETTINGS_ENTRY_HOLD_MS = 1000;
 constexpr char WEATHER_API_URL[] =
     "https://api.openweathermap.org/data/2.5/weather";
 constexpr int SD_CS_PIN = 4;
@@ -49,11 +52,6 @@ enum class WeatherRequestSource {
   Scheduled,
 };
 
-enum class ClockDisplayPrecision {
-  Minutes,
-  Seconds,
-};
-
 WeatherData weather;
 unsigned long lastWeatherAttempt = 0;
 bool weatherAttempted = false;
@@ -62,11 +60,13 @@ unsigned long buttonAPressDetectedAt = 0;
 bool buttonAConfirmationPending = false;
 ClockDisplayPrecision clockDisplayPrecision = ClockDisplayPrecision::Minutes;
 bool storageAvailable = false;
+AppSettings appSettings;
+SettingsMode settingsMode;
 SpeechService speech;
 bool speechAvailable = false;
 TemperatureAlertService temperatureAlerts;
 
-void showSplashScreen() {
+bool showSplashScreen() {
   M5.Lcd.fillScreen(TFT_NAVY);
   M5.Lcd.drawRect(8, 8, 304, 224, TFT_CYAN);
   M5.Lcd.drawRect(12, 12, 296, 216, TFT_DARKCYAN);
@@ -86,14 +86,32 @@ void showSplashScreen() {
 
   M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_NAVY);
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(112, 184);
+  M5.Lcd.setCursor(88, 180);
+  M5.Lcd.println("Hold B for settings");
+  M5.Lcd.setCursor(112, 196);
   M5.Lcd.println("Initializing...");
-  M5.Lcd.setCursor(116, 210);
+  M5.Lcd.setCursor(116, 216);
   M5.Lcd.println("M5Stack Basic");
 
   const unsigned long startedAt = millis();
+  unsigned long buttonBHeldAt = 0;
+  bool settingsRequested = false;
   while (millis() - startedAt < SPLASH_DURATION_MS) {
     M5.update();
+    if (M5.BtnB.isPressed()) {
+      if (buttonBHeldAt == 0) {
+        buttonBHeldAt = millis();
+      } else if (!settingsRequested &&
+                 millis() - buttonBHeldAt >= SETTINGS_ENTRY_HOLD_MS) {
+        settingsRequested = true;
+        M5.Lcd.fillRect(70, 174, 180, 36, TFT_NAVY);
+        M5.Lcd.setTextColor(TFT_GREEN, TFT_NAVY);
+        M5.Lcd.setCursor(91, 186);
+        M5.Lcd.print("Settings requested");
+      }
+    } else if (!settingsRequested) {
+      buttonBHeldAt = 0;
+    }
     delay(10);
   }
 
@@ -102,6 +120,7 @@ void showSplashScreen() {
   M5.Lcd.setTextSize(2);
   M5.Lcd.setCursor(20, 40);
   M5.Lcd.println("Starting services...");
+  return settingsRequested;
 }
 
 bool initializeStorage() {
@@ -443,7 +462,10 @@ void setup() {
   M5.begin(true, false, true);
   Serial.begin(115200);
 
-  showSplashScreen();
+  appSettings.begin();
+  clockDisplayPrecision = appSettings.clockPrecision();
+  speech.setVolumePercent(appSettings.volumePercent());
+  const bool settingsRequested = showSplashScreen();
 
   storageAvailable = initializeStorage();
   speechAvailable = storageAvailable && speech.begin();
@@ -453,6 +475,23 @@ void setup() {
   drawDateTime();
   drawWeather();
   fetchWeather(WeatherRequestSource::Startup);
+
+  if (settingsRequested) {
+    tm diagnosticTime = {};
+    const DiagnosticStatus diagnostics = {
+        storageAvailable,
+        storageAvailable && SD.exists("/aq_dic/aqdic_m.bin"),
+        speechAvailable,
+        WiFi.status() == WL_CONNECTED,
+        getLocalTime(&diagnosticTime, 10),
+        weather.valid,
+    };
+    settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
+    clockDisplayPrecision = appSettings.clockPrecision();
+    speech.setVolumePercent(appSettings.volumePercent());
+    drawDateTime();
+    drawWeather();
+  }
 }
 
 void loop() {

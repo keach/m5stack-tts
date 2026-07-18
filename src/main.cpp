@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "secrets.h"
+#include "AmbientPublisher.h"
 #include "AppSettings.h"
 #include "RainAlertService.h"
 #include "SettingsMode.h"
@@ -68,6 +69,7 @@ SpeechService speech;
 bool speechAvailable = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
+AmbientPublisher ambientPublisher;
 
 bool showSplashScreen() {
   M5.Lcd.fillScreen(TFT_NAVY);
@@ -142,7 +144,7 @@ bool initializeStorage() {
   return true;
 }
 
-bool appendWeatherLog(const WeatherData& data) {
+bool appendWeatherLog(const WeatherData& data, time_t observedAt) {
   if (!storageAvailable) {
     return false;
   }
@@ -160,9 +162,10 @@ bool appendWeatherLog(const WeatherData& data) {
         "datetime,weather,temp_c,humidity_pct,pressure_hpa,rain_1h_mm");
   }
 
-  tm timeInfo = {};
   char formattedTime[20] = "unknown";
-  if (getLocalTime(&timeInfo, 10)) {
+  if (observedAt >= 1600000000) {
+    tm timeInfo = {};
+    localtime_r(&observedAt, &timeInfo);
     strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S",
              &timeInfo);
   }
@@ -457,6 +460,7 @@ bool fetchWeather(WeatherRequestSource source) {
   weather.valid = true;
   http.end();
 
+  const time_t observedAt = time(nullptr);
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
@@ -470,7 +474,12 @@ bool fetchWeather(WeatherRequestSource source) {
   Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
                 weather.condition, weather.temperature, weather.humidity,
                 weather.pressure, weather.rainLastHour);
-  appendWeatherLog(weather);
+  appendWeatherLog(weather, observedAt);
+  ambientPublisher.publish(
+      observedAt, weather.condition, weather.temperature, weather.humidity,
+      weather.pressure, weather.rainLastHour,
+      temperatureAlerts.activeThreshold(weather.temperature),
+      isRainingCondition(weather.condition), WiFi.RSSI());
   drawWeather();
   return true;
 }

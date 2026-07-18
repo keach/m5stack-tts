@@ -2,6 +2,7 @@
 .pio-core/
 .venv/
 include/secrets.h
+include/ambient_secrets.h
 vendor/aquestalk/
 sdcard/aq_dic/aqdic_m.bin
 .vscode/.browse.c_cpp.db*

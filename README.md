@@ -15,6 +15,7 @@ M5Stack Basic（ESP32）向けのPlatformIOプロジェクトです。
 - OpenWeatherからの現在の天気、気温、湿度、気圧、直近1時間雨量の取得と画面表示
 - 10分ごとの自動更新と、ボタンAによる手動更新
 - microSDカードの初期化と、天気情報の `/weather.csv` への記録
+- 計測時刻を指定したAmbientへの気象データ送信
 - AquesTalk ESP32 Small辞書版を使った日時・天気の読み上げ
 - ボタンBによる読み上げと、ボタンCによる発話停止
 - 30℃・35℃の高温アラート、夜間の消音、再通知制御、NVSへの状態保存
@@ -56,6 +57,19 @@ cp include/secrets.example.h include/secrets.h
 ```
 
 `include/secrets.h` にWi-FiのSSIDとパスワード、OpenWeather APIキー、天気を取得する地点の緯度・経度を設定してください。このファイルはGitの管理対象外です。
+
+Ambientへ送信する場合は、サンプルをコピーし、作成したチャネルのチャネルIDとライトキーを設定します。このファイルもGitの管理対象外です。
+
+```sh
+cp include/ambient_secrets.example.h include/ambient_secrets.h
+```
+
+```cpp
+constexpr unsigned int AMBIENT_CHANNEL_ID = 12345;
+constexpr char AMBIENT_WRITE_KEY[] = "your-write-key";
+```
+
+Ambientには、`d1`から順に気温、湿度、気圧、直近1時間雨量、高温アラート閾値、現在の降雨状態、Wi-Fi RSSIを送信します。天気分類はコメントへ設定します。すべての送信でNTP同期済みの計測時刻を `created` として指定し、時刻が同期されていない場合はAmbient送信を行いません。SDカードへの記録は継続します。
 
 起動時にWi-Fiへ接続した後、NTPサーバーから時刻を取得します。時刻は日本標準時（JST）で液晶とシリアルモニターに表示されます。液晶のデフォルト表示形式は `yyyy.mm.dd. ddd hh:mm` で、設定モードから秒表示へ切り替えられます。
 

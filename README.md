@@ -69,7 +69,7 @@ constexpr unsigned int AMBIENT_CHANNEL_ID = 12345;
 constexpr char AMBIENT_WRITE_KEY[] = "your-write-key";
 ```
 
-Ambientには、`d1`から順に気温、湿度、気圧、直近1時間雨量、高温アラート閾値、現在の降雨状態、Wi-Fi RSSIを送信します。天気分類はコメントへ設定します。すべての送信でNTP同期済みの計測時刻を `created` として指定し、時刻が同期されていない場合はAmbient送信を行いません。SDカードへの記録は継続します。
+Ambientには、`d1`から順に気温、湿度、気圧、直近1時間雨量、高温アラート閾値、現在の降雨状態、Wi-Fi RSSIを送信します。天気分類はコメントへ設定します。すべての送信でOpenWeatherの `dt` が示す気象データの計算時刻を `created` として指定し、画面下部にも同じ時刻を `yyyy.mm.dd. hh:mm` 形式でAmbient送信結果とともに表示します。`dt` が取得できない場合は受信時刻を使用します。時刻が同期されていない場合はAmbient送信を行わず、SDカードへの記録は継続します。
 
 起動時にWi-Fiへ接続した後、NTPサーバーから時刻を取得します。時刻は日本標準時（JST）で液晶とシリアルモニターに表示されます。液晶のデフォルト表示形式は `yyyy.mm.dd. ddd hh:mm` で、設定モードから秒表示へ切り替えられます。
 

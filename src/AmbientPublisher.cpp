@@ -13,22 +13,21 @@ constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr uint16_t REQUEST_TIMEOUT_MS = 10000;
 }  // namespace
 
-bool AmbientPublisher::publish(time_t observedAt, const char* condition,
-                               float temperature, int humidity, int pressure,
-                               float rainLastHour,
-                               int temperatureAlertThreshold, bool rainingNow,
-                               int wifiRssi) {
+AmbientPublishResult AmbientPublisher::publish(
+    time_t observedAt, const char* condition, float temperature, int humidity,
+    int pressure, float rainLastHour, int temperatureAlertThreshold,
+    bool rainingNow, int wifiRssi) {
   if (AMBIENT_CHANNEL_ID == 0 || AMBIENT_WRITE_KEY[0] == '\0') {
     Serial.println("Ambient upload skipped because credentials are not set.");
-    return false;
+    return AmbientPublishResult::CredentialsMissing;
   }
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Ambient upload skipped because Wi-Fi is disconnected.");
-    return false;
+    return AmbientPublishResult::WiFiDisconnected;
   }
   if (observedAt < MINIMUM_VALID_TIME) {
     Serial.println("Ambient upload skipped because time is not synchronized.");
-    return false;
+    return AmbientPublishResult::TimeUnavailable;
   }
 
   tm timeInfo = {};
@@ -59,7 +58,7 @@ bool AmbientPublisher::publish(time_t observedAt, const char* condition,
   http.setTimeout(REQUEST_TIMEOUT_MS);
   if (!http.begin(client, url)) {
     Serial.println("Failed to initialize the Ambient request.");
-    return false;
+    return AmbientPublishResult::RequestFailed;
   }
   http.addHeader("Content-Type", "application/json");
 
@@ -68,9 +67,9 @@ bool AmbientPublisher::publish(time_t observedAt, const char* condition,
   http.end();
   if (statusCode < 200 || statusCode >= 300) {
     Serial.printf("Ambient API returned HTTP %d.\n", statusCode);
-    return false;
+    return AmbientPublishResult::RequestFailed;
   }
 
   Serial.println("Weather data sent to Ambient.");
-  return true;
+  return AmbientPublishResult::Sent;
 }

@@ -31,6 +31,7 @@ constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
 constexpr unsigned long SPLASH_DURATION_MS = 3000;
 constexpr unsigned long SETTINGS_ENTRY_HOLD_MS = 1000;
+constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr char WEATHER_API_URL[] =
     "https://api.openweathermap.org/data/2.5/weather";
 constexpr int SD_CS_PIN = 4;
@@ -46,6 +47,7 @@ struct WeatherData {
   int humidity = 0;
   int pressure = 0;
   float rainLastHour = 0;
+  time_t observedAt = 0;
   bool valid = false;
 };
 
@@ -70,6 +72,7 @@ bool speechAvailable = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 AmbientPublisher ambientPublisher;
+AmbientPublishResult ambientPublishResult = AmbientPublishResult::NotAttempted;
 
 bool showSplashScreen() {
   M5.Lcd.fillScreen(TFT_NAVY);
@@ -163,7 +166,7 @@ bool appendWeatherLog(const WeatherData& data, time_t observedAt) {
   }
 
   char formattedTime[20] = "unknown";
-  if (observedAt >= 1600000000) {
+  if (observedAt >= MINIMUM_VALID_TIME) {
     tm timeInfo = {};
     localtime_r(&observedAt, &timeInfo);
     strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S",
@@ -325,8 +328,51 @@ void drawWeather() {
   M5.Lcd.printf("Pressure: %d hPa", weather.pressure);
   M5.Lcd.setCursor(16, 188);
   M5.Lcd.printf("Rain 1h : %.1f mm", weather.rainLastHour);
-  M5.Lcd.setCursor(16, 222);
+
   M5.Lcd.setTextSize(1);
+  char observedText[20] = "unavailable";
+  if (weather.observedAt >= MINIMUM_VALID_TIME) {
+    tm observedTime = {};
+    localtime_r(&weather.observedAt, &observedTime);
+    strftime(observedText, sizeof(observedText), "%Y.%m.%d. %H:%M",
+             &observedTime);
+  }
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(16, 207);
+  M5.Lcd.printf("Observed: %s", observedText);
+
+  const char* ambientStatus = "not attempted";
+  uint16_t ambientStatusColor = TFT_LIGHTGREY;
+  switch (ambientPublishResult) {
+    case AmbientPublishResult::Sent:
+      ambientStatus = "sent";
+      ambientStatusColor = TFT_GREEN;
+      break;
+    case AmbientPublishResult::CredentialsMissing:
+      ambientStatus = "not configured";
+      ambientStatusColor = TFT_ORANGE;
+      break;
+    case AmbientPublishResult::WiFiDisconnected:
+      ambientStatus = "offline";
+      ambientStatusColor = TFT_ORANGE;
+      break;
+    case AmbientPublishResult::TimeUnavailable:
+      ambientStatus = "time unavailable";
+      ambientStatusColor = TFT_ORANGE;
+      break;
+    case AmbientPublishResult::RequestFailed:
+      ambientStatus = "failed";
+      ambientStatusColor = TFT_RED;
+      break;
+    case AmbientPublishResult::NotAttempted:
+      break;
+  }
+  M5.Lcd.setTextColor(ambientStatusColor, TFT_BLACK);
+  M5.Lcd.setCursor(16, 218);
+  M5.Lcd.printf("Ambient: %s", ambientStatus);
+
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setCursor(16, 230);
   M5.Lcd.print("A: refresh  B: speak  C: stop");
 }
 
@@ -457,10 +503,16 @@ bool fetchWeather(WeatherRequestSource source) {
   weather.humidity = document["main"]["humidity"] | 0;
   weather.pressure = document["main"]["pressure"] | 0;
   weather.rainLastHour = document["rain"]["1h"] | 0.0F;
+  weather.observedAt =
+      static_cast<time_t>(document["dt"] | static_cast<int64_t>(0));
+  if (weather.observedAt < MINIMUM_VALID_TIME) {
+    weather.observedAt = time(nullptr);
+    Serial.println(
+        "OpenWeather response did not contain a valid dt; using receipt time.");
+  }
   weather.valid = true;
   http.end();
 
-  const time_t observedAt = time(nullptr);
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
@@ -474,10 +526,10 @@ bool fetchWeather(WeatherRequestSource source) {
   Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
                 weather.condition, weather.temperature, weather.humidity,
                 weather.pressure, weather.rainLastHour);
-  appendWeatherLog(weather, observedAt);
-  ambientPublisher.publish(
-      observedAt, weather.condition, weather.temperature, weather.humidity,
-      weather.pressure, weather.rainLastHour,
+  appendWeatherLog(weather, weather.observedAt);
+  ambientPublishResult = ambientPublisher.publish(
+      weather.observedAt, weather.condition, weather.temperature,
+      weather.humidity, weather.pressure, weather.rainLastHour,
       temperatureAlerts.activeThreshold(weather.temperature),
       isRainingCondition(weather.condition), WiFi.RSSI());
   drawWeather();

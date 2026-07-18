@@ -14,6 +14,7 @@
 #include "RainAlertService.h"
 #include "SettingsMode.h"
 #include "SpeechService.h"
+#include "SpeechNumberFormatter.h"
 #include "TemperatureAlertService.h"
 
 namespace {
@@ -364,13 +365,19 @@ void speakCurrentWeather() {
              timeInfo.tm_min);
   }
 
+  char pressureText[32];
+  char rainText[24];
+  SpeechNumberFormatter::formatInteger(weather.pressure, pressureText,
+                                       sizeof(pressureText));
+  SpeechNumberFormatter::formatOneDecimal(weather.rainLastHour, rainText,
+                                          sizeof(rainText));
+
   char message[384];
   snprintf(message, sizeof(message),
            "%s現在の天気は%sです。気温は%.1f度、湿度は%dパーセント、"
-           "気圧は%dヘクトパスカル、1時間雨量は%.1fミリです。",
+           "気圧は%sヘクトパスカル、1時間雨量は%sミリです。",
            dateTimeText, weatherConditionInJapanese(weather.condition),
-           weather.temperature, weather.humidity, weather.pressure,
-           weather.rainLastHour);
+           weather.temperature, weather.humidity, pressureText, rainText);
   Serial.printf("Speaking: %s\n", message);
   if (!speech.speak(message)) {
     Serial.println("Failed to start speech.");

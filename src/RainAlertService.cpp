@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <time.h>
 
+#include "SpeechNumberFormatter.h"
+
 namespace {
 constexpr char NVS_NAMESPACE[] = "rain_alert";
 constexpr char ACTIVE_KEY[] = "active";
@@ -92,10 +94,13 @@ void RainAlertService::evaluate(bool rainingNow, const char* condition,
     return;
   }
 
+  char rainText[24];
+  SpeechNumberFormatter::formatOneDecimal(rainLastHour, rainText,
+                                          sizeof(rainText));
   char message[160];
   snprintf(message, sizeof(message),
-           "降雨のお知らせです。雨が降っています。直近1時間の雨量は%.1fミリです。",
-           rainLastHour);
+           "降雨のお知らせです。雨が降っています。直近1時間の雨量は%sミリです。",
+           rainText);
   speech.playAlertTone();
   speech.speak(message);
 }

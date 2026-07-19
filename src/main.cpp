@@ -29,11 +29,15 @@ constexpr unsigned long WEATHER_UPDATE_INTERVAL_MS = 10UL * 60UL * 1000UL;
 constexpr unsigned long MANUAL_WEATHER_MIN_INTERVAL_MS = 30UL * 1000UL;
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
+constexpr unsigned long FORECAST_SCREEN_TIMEOUT_MS = 60UL * 1000UL;
 constexpr unsigned long SPLASH_DURATION_MS = 3000;
 constexpr unsigned long SETTINGS_ENTRY_HOLD_MS = 1000;
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr char WEATHER_API_URL[] =
     "https://api.openweathermap.org/data/2.5/weather";
+constexpr char FORECAST_API_URL[] =
+    "https://api.openweathermap.org/data/2.5/forecast";
+constexpr size_t FORECAST_ENTRY_COUNT = 4;
 constexpr int SD_CS_PIN = 4;
 constexpr int SD_SCK_PIN = 18;
 constexpr int SD_MISO_PIN = 19;
@@ -51,6 +55,33 @@ struct WeatherData {
   bool valid = false;
 };
 
+struct ForecastEntry {
+  time_t forecastAt = 0;
+  char condition[24] = "--";
+  float temperature = 0;
+  uint8_t precipitationProbability = 0;
+  float rainThreeHours = 0;
+};
+
+struct ForecastData {
+  ForecastEntry entries[FORECAST_ENTRY_COUNT];
+  size_t count = 0;
+  time_t observedAt = 0;
+  bool valid = false;
+};
+
+enum class ForecastRequestStatus {
+  NotAttempted,
+  Loading,
+  Available,
+  Failed,
+};
+
+enum class MainScreen {
+  CurrentWeather,
+  Forecast,
+};
+
 enum class WeatherRequestSource {
   Startup,
   ManualButton,
@@ -58,6 +89,11 @@ enum class WeatherRequestSource {
 };
 
 WeatherData weather;
+ForecastData forecast;
+ForecastRequestStatus forecastRequestStatus =
+    ForecastRequestStatus::NotAttempted;
+MainScreen mainScreen = MainScreen::CurrentWeather;
+unsigned long lastForecastInteraction = 0;
 unsigned long lastWeatherAttempt = 0;
 bool weatherAttempted = false;
 unsigned long lastDisplayUpdate = 0;
@@ -314,7 +350,7 @@ void drawWeather() {
     M5.Lcd.println("Weather unavailable");
     M5.Lcd.setCursor(16, 214);
     M5.Lcd.setTextSize(1);
-    M5.Lcd.println("A: refresh  B: speak  C: stop");
+    M5.Lcd.println("A:refresh B:speak/stop C:forecast");
     return;
   }
 
@@ -373,7 +409,83 @@ void drawWeather() {
 
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Lcd.setCursor(16, 230);
-  M5.Lcd.print("A: refresh  B: speak  C: stop");
+  M5.Lcd.print("A:refresh B:speak/stop C:forecast");
+}
+
+void drawForecast() {
+  M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextColor(forecastRequestStatus == ForecastRequestStatus::Failed
+                          ? TFT_ORANGE
+                          : TFT_CYAN,
+                      TFT_BLACK);
+  M5.Lcd.setCursor(16, 40);
+  M5.Lcd.print("FORECAST");
+
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(16, 62);
+  if (forecast.valid && forecast.observedAt >= MINIMUM_VALID_TIME) {
+    char observedText[20];
+    tm observedTime = {};
+    localtime_r(&forecast.observedAt, &observedTime);
+    strftime(observedText, sizeof(observedText), "%Y.%m.%d. %H:%M",
+             &observedTime);
+    M5.Lcd.printf("Observed: %s", observedText);
+  } else {
+    M5.Lcd.print("Observed: unavailable");
+  }
+
+  if (forecastRequestStatus == ForecastRequestStatus::Loading) {
+    M5.Lcd.setTextColor(TFT_YELLOW, TFT_BLACK);
+    M5.Lcd.setCursor(226, 42);
+    M5.Lcd.print("updating...");
+  } else if (forecastRequestStatus == ForecastRequestStatus::Failed) {
+    M5.Lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
+    M5.Lcd.setCursor(220, 42);
+    M5.Lcd.print("update failed");
+  }
+
+  if (!forecast.valid) {
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(forecastRequestStatus == ForecastRequestStatus::Failed
+                            ? TFT_RED
+                            : TFT_WHITE,
+                        TFT_BLACK);
+    M5.Lcd.setCursor(16, 104);
+    M5.Lcd.print(forecastRequestStatus == ForecastRequestStatus::Failed
+                     ? "Forecast failed"
+                     : "Forecast unavailable");
+  } else {
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    for (size_t index = 0; index < forecast.count; ++index) {
+      const ForecastEntry& entry = forecast.entries[index];
+      tm forecastTime = {};
+      localtime_r(&entry.forecastAt, &forecastTime);
+      const int y = 84 + static_cast<int>(index) * 34;
+      M5.Lcd.setCursor(10, y);
+      M5.Lcd.printf("%02d/%02d %02d:%02d %-12s", forecastTime.tm_mon + 1,
+                    forecastTime.tm_mday, forecastTime.tm_hour,
+                    forecastTime.tm_min, entry.condition);
+      M5.Lcd.setCursor(22, y + 13);
+      M5.Lcd.printf("%.1fC  PoP %u%%  Rain %.1fmm", entry.temperature,
+                    entry.precipitationProbability, entry.rainThreeHours);
+    }
+  }
+
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setCursor(16, 230);
+  M5.Lcd.print("A:refresh B:speak/stop C:back");
+}
+
+void drawMainScreen() {
+  if (mainScreen == MainScreen::Forecast) {
+    drawForecast();
+  } else {
+    drawWeather();
+  }
 }
 
 const char* weatherConditionInJapanese(const char* condition) {
@@ -433,6 +545,69 @@ void speakCurrentWeather() {
   }
 }
 
+void speakForecast() {
+  if (!speechAvailable) {
+    Serial.println("Speech service is unavailable.");
+    return;
+  }
+  if (!forecast.valid || forecast.count == 0) {
+    speech.speak("予報情報を取得できません。");
+    return;
+  }
+
+  char message[768] = "";
+  size_t used = 0;
+  for (size_t index = 0; index < forecast.count && used < sizeof(message);
+       ++index) {
+    const ForecastEntry& entry = forecast.entries[index];
+    tm forecastTime = {};
+    localtime_r(&entry.forecastAt, &forecastTime);
+    const int written = snprintf(
+        message + used, sizeof(message) - used,
+        "%d月%d日%d時の予報、%s、気温%.1f度、降水確率%dパーセント。",
+        forecastTime.tm_mon + 1, forecastTime.tm_mday, forecastTime.tm_hour,
+        weatherConditionInJapanese(entry.condition), entry.temperature,
+        entry.precipitationProbability);
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(message) - used) {
+      Serial.println("Forecast speech message was truncated.");
+      break;
+    }
+    used += static_cast<size_t>(written);
+
+    if (entry.rainThreeHours > 0.0F) {
+      char rainText[24];
+      SpeechNumberFormatter::formatOneDecimal(entry.rainThreeHours, rainText,
+                                              sizeof(rainText));
+      const int rainWritten =
+          snprintf(message + used, sizeof(message) - used,
+                   "予想雨量%sミリ。", rainText);
+      if (rainWritten < 0 ||
+          static_cast<size_t>(rainWritten) >= sizeof(message) - used) {
+        Serial.println("Forecast rain speech message was truncated.");
+        break;
+      }
+      used += static_cast<size_t>(rainWritten);
+    }
+  }
+
+  Serial.printf("Speaking forecast: %s\n", message);
+  if (!speech.speak(message)) {
+    Serial.println("Failed to start forecast speech.");
+  }
+}
+
+void toggleScreenSpeech() {
+  if (speech.isSpeaking()) {
+    speech.stop();
+    return;
+  }
+  if (mainScreen == MainScreen::Forecast) {
+    speakForecast();
+  } else {
+    speakCurrentWeather();
+  }
+}
+
 const char* weatherRequestSourceName(WeatherRequestSource source) {
   switch (source) {
     case WeatherRequestSource::Startup:
@@ -445,32 +620,15 @@ const char* weatherRequestSourceName(WeatherRequestSource source) {
   return "unknown";
 }
 
-bool fetchWeather(WeatherRequestSource source) {
-  const unsigned long now = millis();
-  if (source == WeatherRequestSource::ManualButton && weatherAttempted &&
-      now - lastWeatherAttempt < MANUAL_WEATHER_MIN_INTERVAL_MS) {
-    const unsigned long remainingSeconds =
-        (MANUAL_WEATHER_MIN_INTERVAL_MS - (now - lastWeatherAttempt) + 999) /
-        1000;
-    Serial.printf(
-        "Weather request from button A ignored; retry in %lu seconds.\n",
-        remainingSeconds);
-    return false;
-  }
-
-  lastWeatherAttempt = now;
-  weatherAttempted = true;
-  Serial.printf("Weather request source: %s.\n",
-                weatherRequestSourceName(source));
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Weather update skipped because Wi-Fi is disconnected.");
-    return false;
-  }
-
-  String url = String(WEATHER_API_URL) + "?lat=" +
+String buildOpenWeatherUrl(const char* endpoint, const char* language) {
+  return String(endpoint) + "?lat=" +
                String(WEATHER_LATITUDE, 6) + "&lon=" +
                String(WEATHER_LONGITUDE, 6) + "&appid=" +
-               OPENWEATHER_API_KEY + "&units=metric&lang=en";
+               OPENWEATHER_API_KEY + "&units=metric&lang=" + language;
+}
+
+bool fetchCurrentWeather() {
+  const String url = buildOpenWeatherUrl(WEATHER_API_URL, "en");
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -526,8 +684,137 @@ bool fetchWeather(WeatherRequestSource source) {
       weather.humidity, weather.pressure, weather.rainLastHour,
       temperatureAlerts.activeThreshold(weather.temperature),
       isRainingCondition(weather.condition), WiFi.RSSI());
-  drawWeather();
+  drawMainScreen();
   return true;
+}
+
+void markForecastRequestFailed() {
+  forecastRequestStatus = ForecastRequestStatus::Failed;
+  if (mainScreen == MainScreen::Forecast) {
+    drawForecast();
+  }
+}
+
+bool fetchForecast() {
+  forecastRequestStatus = ForecastRequestStatus::Loading;
+  if (mainScreen == MainScreen::Forecast) {
+    drawForecast();
+  }
+
+  const String url =
+      buildOpenWeatherUrl(FORECAST_API_URL, "ja") + "&cnt=" +
+      String(static_cast<unsigned int>(FORECAST_ENTRY_COUNT));
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(10000);
+  if (!http.begin(client, url)) {
+    Serial.println("Failed to initialize the forecast request.");
+    markForecastRequestFailed();
+    return false;
+  }
+
+  Serial.println("Requesting forecast...");
+  const int statusCode = http.GET();
+  if (statusCode != HTTP_CODE_OK) {
+    Serial.printf("Forecast API returned HTTP %d.\n", statusCode);
+    http.end();
+    markForecastRequestFailed();
+    return false;
+  }
+
+  JsonDocument filter;
+  for (size_t index = 0; index < FORECAST_ENTRY_COUNT; ++index) {
+    filter["list"][index]["dt"] = true;
+    filter["list"][index]["main"]["temp"] = true;
+    filter["list"][index]["weather"][0]["main"] = true;
+    filter["list"][index]["pop"] = true;
+    filter["list"][index]["rain"]["3h"] = true;
+  }
+
+  JsonDocument document;
+  const DeserializationError error = deserializeJson(
+      document, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (error) {
+    Serial.printf("Forecast JSON parsing failed: %s\n", error.c_str());
+    markForecastRequestFailed();
+    return false;
+  }
+
+  ForecastData updated;
+  const JsonArrayConst entries = document["list"].as<JsonArrayConst>();
+  for (JsonObjectConst source : entries) {
+    if (updated.count >= FORECAST_ENTRY_COUNT) {
+      break;
+    }
+    const time_t forecastAt =
+        static_cast<time_t>(source["dt"] | static_cast<int64_t>(0));
+    if (forecastAt < MINIMUM_VALID_TIME) {
+      continue;
+    }
+
+    ForecastEntry& entry = updated.entries[updated.count++];
+    entry.forecastAt = forecastAt;
+    strlcpy(entry.condition, source["weather"][0]["main"] | "Unknown",
+            sizeof(entry.condition));
+    entry.temperature = source["main"]["temp"] | 0.0F;
+    const float probability = source["pop"] | 0.0F;
+    entry.precipitationProbability = static_cast<uint8_t>(
+        constrain(static_cast<int>(probability * 100.0F + 0.5F), 0, 100));
+    entry.rainThreeHours = source["rain"]["3h"] | 0.0F;
+  }
+
+  if (updated.count == 0) {
+    Serial.println("Forecast response contained no usable entries.");
+    markForecastRequestFailed();
+    return false;
+  }
+
+  updated.observedAt = time(nullptr);
+  updated.valid = true;
+  forecast = updated;
+  forecastRequestStatus = ForecastRequestStatus::Available;
+  Serial.printf("Forecast updated with %u entries.\n",
+                static_cast<unsigned int>(forecast.count));
+  for (size_t index = 0; index < forecast.count; ++index) {
+    const ForecastEntry& entry = forecast.entries[index];
+    Serial.printf("  %lld: %s, %.1f C, PoP %u %%, rain %.1f mm/3h\n",
+                  static_cast<long long>(entry.forecastAt), entry.condition,
+                  entry.temperature, entry.precipitationProbability,
+                  entry.rainThreeHours);
+  }
+  return true;
+}
+
+bool updateWeather(WeatherRequestSource source) {
+  const unsigned long now = millis();
+  if (source == WeatherRequestSource::ManualButton && weatherAttempted &&
+      now - lastWeatherAttempt < MANUAL_WEATHER_MIN_INTERVAL_MS) {
+    const unsigned long remainingSeconds =
+        (MANUAL_WEATHER_MIN_INTERVAL_MS - (now - lastWeatherAttempt) + 999) /
+        1000;
+    Serial.printf(
+        "Weather request from button A ignored; retry in %lu seconds.\n",
+        remainingSeconds);
+    return false;
+  }
+
+  lastWeatherAttempt = now;
+  weatherAttempted = true;
+  Serial.printf("Weather request source: %s.\n",
+                weatherRequestSourceName(source));
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Weather update skipped because Wi-Fi is disconnected.");
+    markForecastRequestFailed();
+    drawMainScreen();
+    return false;
+  }
+
+  const bool currentUpdated = fetchCurrentWeather();
+  const bool forecastUpdated = fetchForecast();
+  drawMainScreen();
+  return currentUpdated || forecastUpdated;
 }
 }  // namespace
 
@@ -549,8 +836,8 @@ void setup() {
   connectToWiFi();
   syncTimeWithNtp();
   drawDateTime();
-  drawWeather();
-  fetchWeather(WeatherRequestSource::Startup);
+  drawMainScreen();
+  updateWeather(WeatherRequestSource::Startup);
 
   if (settingsRequested) {
     tm diagnosticTime = {};
@@ -566,7 +853,7 @@ void setup() {
     clockDisplayPrecision = appSettings.clockPrecision();
     speech.setVolumePercent(appSettings.volumePercent());
     drawDateTime();
-    drawWeather();
+    drawMainScreen();
   }
 }
 
@@ -574,6 +861,9 @@ void loop() {
   M5.update();
 
   if (M5.BtnA.wasPressed()) {
+    if (mainScreen == MainScreen::Forecast) {
+      lastForecastInteraction = millis();
+    }
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
     Serial.printf("Button A signal detected (raw pin: %d).\n",
@@ -586,19 +876,33 @@ void loop() {
     } else if (millis() - buttonAPressDetectedAt >= BUTTON_CONFIRMATION_MS) {
       buttonAConfirmationPending = false;
       Serial.println("Button A press confirmed.");
-      fetchWeather(WeatherRequestSource::ManualButton);
+      updateWeather(WeatherRequestSource::ManualButton);
     }
   }
   if (M5.BtnB.wasPressed()) {
-    speakCurrentWeather();
+    if (mainScreen == MainScreen::Forecast) {
+      lastForecastInteraction = millis();
+    }
+    toggleScreenSpeech();
   }
   if (M5.BtnC.wasPressed()) {
-    speech.stop();
+    mainScreen = mainScreen == MainScreen::CurrentWeather
+                     ? MainScreen::Forecast
+                     : MainScreen::CurrentWeather;
+    if (mainScreen == MainScreen::Forecast) {
+      lastForecastInteraction = millis();
+    }
+    drawMainScreen();
   }
 
   const unsigned long now = millis();
   if (now - lastWeatherAttempt >= WEATHER_UPDATE_INTERVAL_MS) {
-    fetchWeather(WeatherRequestSource::Scheduled);
+    updateWeather(WeatherRequestSource::Scheduled);
+  }
+  if (mainScreen == MainScreen::Forecast &&
+      now - lastForecastInteraction >= FORECAST_SCREEN_TIMEOUT_MS) {
+    mainScreen = MainScreen::CurrentWeather;
+    drawMainScreen();
   }
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL_MS) {
     lastDisplayUpdate = now;

@@ -375,7 +375,7 @@ void drawWeather() {
   }
   M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   M5.Lcd.setCursor(16, 207);
-  M5.Lcd.printf("Observed: %s", observedText);
+  M5.Lcd.printf("API Fetched: %s", observedText);
 
   const char* ambientStatus = "not attempted";
   uint16_t ambientStatusColor = TFT_LIGHTGREY;
@@ -420,22 +420,9 @@ void drawForecast() {
                           : TFT_CYAN,
                       TFT_BLACK);
   M5.Lcd.setCursor(16, 40);
-  M5.Lcd.print("FORECAST");
+  M5.Lcd.print("WEATHER FORECAST");
 
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  M5.Lcd.setCursor(16, 62);
-  if (forecast.valid && forecast.observedAt >= MINIMUM_VALID_TIME) {
-    char observedText[20];
-    tm observedTime = {};
-    localtime_r(&forecast.observedAt, &observedTime);
-    strftime(observedText, sizeof(observedText), "%Y.%m.%d. %H:%M",
-             &observedTime);
-    M5.Lcd.printf("Observed: %s", observedText);
-  } else {
-    M5.Lcd.print("Observed: unavailable");
-  }
-
   if (forecastRequestStatus == ForecastRequestStatus::Loading) {
     M5.Lcd.setTextColor(TFT_YELLOW, TFT_BLACK);
     M5.Lcd.setCursor(226, 42);
@@ -457,24 +444,37 @@ void drawForecast() {
                      ? "Forecast failed"
                      : "Forecast unavailable");
   } else {
-    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
     for (size_t index = 0; index < forecast.count; ++index) {
       const ForecastEntry& entry = forecast.entries[index];
       tm forecastTime = {};
       localtime_r(&entry.forecastAt, &forecastTime);
-      const int y = 84 + static_cast<int>(index) * 34;
-      M5.Lcd.setCursor(10, y);
-      M5.Lcd.printf("%02d/%02d %02d:%02d %-12s", forecastTime.tm_mon + 1,
+      const int y = 60 + static_cast<int>(index) * 39;
+      M5.Lcd.setCursor(16, y);
+      M5.Lcd.printf("%02d/%02d %02d:%02d %s", forecastTime.tm_mon + 1,
                     forecastTime.tm_mday, forecastTime.tm_hour,
                     forecastTime.tm_min, entry.condition);
-      M5.Lcd.setCursor(22, y + 13);
-      M5.Lcd.printf("%.1fC  PoP %u%%  Rain %.1fmm", entry.temperature,
+      M5.Lcd.setCursor(28, y + 17);
+      M5.Lcd.printf("%.1f C/%u %%/%.1f mm", entry.temperature,
                     entry.precipitationProbability, entry.rainThreeHours);
     }
   }
 
   M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(16, 218);
+  if (forecast.valid && forecast.observedAt >= MINIMUM_VALID_TIME) {
+    char observedText[20];
+    tm observedTime = {};
+    localtime_r(&forecast.observedAt, &observedTime);
+    strftime(observedText, sizeof(observedText), "%Y.%m.%d. %H:%M",
+             &observedTime);
+    M5.Lcd.printf("API Fetched: %s", observedText);
+  } else {
+    M5.Lcd.print("API Fetched: unavailable");
+  }
+
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Lcd.setCursor(16, 230);
   M5.Lcd.print("A:refresh B:speak/stop C:back");
@@ -555,44 +555,43 @@ void speakForecast() {
     return;
   }
 
-  char message[768] = "";
-  size_t used = 0;
-  for (size_t index = 0; index < forecast.count && used < sizeof(message);
-       ++index) {
+  for (size_t index = 0; index < forecast.count; ++index) {
     const ForecastEntry& entry = forecast.entries[index];
     tm forecastTime = {};
     localtime_r(&entry.forecastAt, &forecastTime);
-    const int written = snprintf(
-        message + used, sizeof(message) - used,
-        "%d月%d日%d時の予報、%s、気温%.1f度、降水確率%dパーセント。",
-        forecastTime.tm_mon + 1, forecastTime.tm_mday, forecastTime.tm_hour,
-        weatherConditionInJapanese(entry.condition), entry.temperature,
-        entry.precipitationProbability);
-    if (written < 0 || static_cast<size_t>(written) >= sizeof(message) - used) {
-      Serial.println("Forecast speech message was truncated.");
-      break;
-    }
-    used += static_cast<size_t>(written);
-
+    char rainPhrase[64] = "";
     if (entry.rainThreeHours > 0.0F) {
       char rainText[24];
       SpeechNumberFormatter::formatOneDecimal(entry.rainThreeHours, rainText,
                                               sizeof(rainText));
-      const int rainWritten =
-          snprintf(message + used, sizeof(message) - used,
-                   "予想雨量%sミリ。", rainText);
-      if (rainWritten < 0 ||
-          static_cast<size_t>(rainWritten) >= sizeof(message) - used) {
-        Serial.println("Forecast rain speech message was truncated.");
-        break;
-      }
-      used += static_cast<size_t>(rainWritten);
+      snprintf(rainPhrase, sizeof(rainPhrase), "予想雨量%sミリ。", rainText);
     }
-  }
 
-  Serial.printf("Speaking forecast: %s\n", message);
-  if (!speech.speak(message)) {
-    Serial.println("Failed to start forecast speech.");
+    char message[256];
+    snprintf(
+        message, sizeof(message),
+        "%d月%d日%d時の予報は、%s、気温%.1f度、降水確率%dパーセント。",
+        forecastTime.tm_mon + 1, forecastTime.tm_mday, forecastTime.tm_hour,
+        weatherConditionInJapanese(entry.condition), entry.temperature,
+        entry.precipitationProbability);
+    strlcat(message, rainPhrase, sizeof(message));
+
+    Serial.printf("Speaking forecast entry %u: %s\n",
+                  static_cast<unsigned int>(index + 1), message);
+    if (!speech.speak(message)) {
+      Serial.println("Failed to start forecast speech.");
+      return;
+    }
+
+    while (speech.isSpeaking()) {
+      M5.update();
+      if (M5.BtnB.wasPressed()) {
+        speech.stop();
+        Serial.println("Forecast speech stopped by button B.");
+        return;
+      }
+      delay(10);
+    }
   }
 }
 

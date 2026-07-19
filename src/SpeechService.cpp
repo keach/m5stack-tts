@@ -10,7 +10,7 @@ namespace {
 constexpr char DICTIONARY_PATH[] = "/aq_dic/aqdic_m.bin";
 constexpr size_t DICTIONARY_VIRTUAL_ADDRESS = 0x10001000U;
 constexpr int FRAME_LENGTH = 32;
-constexpr int PHONETIC_BUFFER_SIZE = 1024;
+constexpr int PHONETIC_BUFFER_SIZE = 2048;
 constexpr int AUDIO_SAMPLE_RATE = 24000;
 constexpr i2s_port_t I2S_PORT = I2S_NUM_0;
 

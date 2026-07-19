@@ -69,7 +69,7 @@ constexpr unsigned int AMBIENT_CHANNEL_ID = 12345;
 constexpr char AMBIENT_WRITE_KEY[] = "your-write-key";
 ```
 
-Ambientには、`d1`から順に気温、湿度、気圧、直近1時間雨量、高温アラート閾値、現在の降雨状態、Wi-Fi RSSIを送信します。天気分類はコメントへ設定します。すべての送信でOpenWeatherの `dt` が示す気象データの計算時刻を `created` として指定し、画面下部にも同じ時刻を `yyyy.mm.dd. hh:mm` 形式でAmbient送信結果とともに表示します。`dt` が取得できない場合は受信時刻を使用します。時刻が同期されていない場合はAmbient送信を行わず、SDカードへの記録は継続します。
+Ambientには、`d1`から順に気温、湿度、気圧、直近1時間雨量、高温アラート閾値、現在の降雨状態、Wi-Fi RSSIを送信します。天気分類はコメントへ設定します。すべての送信でOpenWeather APIから正常に気象情報を取得した時刻を `created` として指定し、画面下部にも同じ時刻を `yyyy.mm.dd. hh:mm` 形式でAmbient送信結果とともに表示します。時刻が同期されていない場合はAmbient送信を行わず、SDカードへの記録は継続します。
 
 Ambientへの送信に失敗したデータは、microSDの `/ambient_queue.ndjson` へ保存します。次回の天気更新時に新しいデータと合わせ、最大10件ずつAmbientの一括送信APIへ再送します。送信に成功したレコードだけをキューから除去します。応答が失われた場合などはAmbient側に同じ `created` のデータが重複する可能性があります。
 

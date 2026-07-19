@@ -503,13 +503,7 @@ bool fetchWeather(WeatherRequestSource source) {
   weather.humidity = document["main"]["humidity"] | 0;
   weather.pressure = document["main"]["pressure"] | 0;
   weather.rainLastHour = document["rain"]["1h"] | 0.0F;
-  weather.observedAt =
-      static_cast<time_t>(document["dt"] | static_cast<int64_t>(0));
-  if (weather.observedAt < MINIMUM_VALID_TIME) {
-    weather.observedAt = time(nullptr);
-    Serial.println(
-        "OpenWeather response did not contain a valid dt; using receipt time.");
-  }
+  weather.observedAt = time(nullptr);
   weather.valid = true;
   http.end();
 

@@ -148,7 +148,9 @@ bool discardQueuedLines(size_t lineCount) {
   source.close();
   temporary.close();
 
-  SD.remove(QUEUE_BACKUP_PATH);
+  if (SD.exists(QUEUE_BACKUP_PATH)) {
+    SD.remove(QUEUE_BACKUP_PATH);
+  }
   if (!SD.rename(QUEUE_PATH, QUEUE_BACKUP_PATH)) {
     SD.remove(QUEUE_TEMP_PATH);
     return false;

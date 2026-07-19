@@ -586,6 +586,7 @@ void speakForecast() {
     while (speech.isSpeaking()) {
       M5.update();
       if (M5.BtnB.wasPressed()) {
+        lastForecastInteraction = millis();
         speech.stop();
         Serial.println("Forecast speech stopped by button B.");
         return;
@@ -860,9 +861,6 @@ void loop() {
   M5.update();
 
   if (M5.BtnA.wasPressed()) {
-    if (mainScreen == MainScreen::Forecast) {
-      lastForecastInteraction = millis();
-    }
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
     Serial.printf("Button A signal detected (raw pin: %d).\n",
@@ -875,6 +873,9 @@ void loop() {
     } else if (millis() - buttonAPressDetectedAt >= BUTTON_CONFIRMATION_MS) {
       buttonAConfirmationPending = false;
       Serial.println("Button A press confirmed.");
+      if (mainScreen == MainScreen::Forecast) {
+        lastForecastInteraction = millis();
+      }
       updateWeather(WeatherRequestSource::ManualButton);
     }
   }
@@ -901,6 +902,7 @@ void loop() {
   if (mainScreen == MainScreen::Forecast &&
       now - lastForecastInteraction >= FORECAST_SCREEN_TIMEOUT_MS) {
     mainScreen = MainScreen::CurrentWeather;
+    Serial.println("Forecast screen timed out; returning to current weather.");
     drawMainScreen();
   }
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL_MS) {

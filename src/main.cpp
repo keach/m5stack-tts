@@ -427,10 +427,6 @@ void drawForecast() {
     M5.Lcd.setTextColor(TFT_YELLOW, TFT_BLACK);
     M5.Lcd.setCursor(226, 42);
     M5.Lcd.print("updating...");
-  } else if (forecastRequestStatus == ForecastRequestStatus::Failed) {
-    M5.Lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
-    M5.Lcd.setCursor(220, 42);
-    M5.Lcd.print("update failed");
   }
 
   if (!forecast.valid) {

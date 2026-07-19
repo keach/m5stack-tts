@@ -28,7 +28,7 @@ void formatCreated(time_t observedAt, char* output, size_t outputSize) {
 }
 
 void buildRecord(JsonDocument& record, time_t observedAt,
-                 const char* condition, float temperature, int humidity,
+                 float temperature, int humidity,
                  int pressure, float rainLastHour,
                  int temperatureAlertThreshold, bool rainingNow,
                  int wifiRssi) {
@@ -42,7 +42,6 @@ void buildRecord(JsonDocument& record, time_t observedAt,
   record["d5"] = temperatureAlertThreshold;
   record["d6"] = rainingNow ? 1 : 0;
   record["d7"] = wifiRssi;
-  record["cmnt"] = condition;
 }
 
 AmbientPublishResult postPayload(JsonDocument& payload, const char* endpoint) {
@@ -227,7 +226,7 @@ AmbientPublishResult sendQueuedBatch() {
 }  // namespace
 
 AmbientPublishResult AmbientPublisher::publish(
-    time_t observedAt, const char* condition, float temperature, int humidity,
+    time_t observedAt, float temperature, int humidity,
     int pressure, float rainLastHour, int temperatureAlertThreshold,
     bool rainingNow, int wifiRssi) {
   if (!credentialsAreSet()) {
@@ -240,7 +239,7 @@ AmbientPublishResult AmbientPublisher::publish(
   }
 
   JsonDocument record;
-  buildRecord(record, observedAt, condition, temperature, humidity, pressure,
+  buildRecord(record, observedAt, temperature, humidity, pressure,
               rainLastHour, temperatureAlertThreshold, rainingNow, wifiRssi);
 
   if (!recoverQueueFiles()) {

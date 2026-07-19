@@ -522,7 +522,7 @@ bool fetchWeather(WeatherRequestSource source) {
                 weather.pressure, weather.rainLastHour);
   appendWeatherLog(weather, weather.observedAt);
   ambientPublishResult = ambientPublisher.publish(
-      weather.observedAt, weather.condition, weather.temperature,
+      weather.observedAt, weather.temperature,
       weather.humidity, weather.pressure, weather.rainLastHour,
       temperatureAlerts.activeThreshold(weather.temperature),
       isRainingCondition(weather.condition), WiFi.RSSI());

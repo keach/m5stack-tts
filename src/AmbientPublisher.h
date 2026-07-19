@@ -14,7 +14,7 @@ enum class AmbientPublishResult {
 
 class AmbientPublisher {
  public:
-  AmbientPublishResult publish(time_t observedAt, const char* condition,
+  AmbientPublishResult publish(time_t observedAt,
                                float temperature, int humidity, int pressure,
                                float rainLastHour,
                                int temperatureAlertThreshold, bool rainingNow,

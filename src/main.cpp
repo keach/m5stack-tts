@@ -47,6 +47,7 @@ constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 
 struct WeatherData {
   char condition[32] = "--";
+  int conditionId = 0;
   float temperature = 0;
   int humidity = 0;
   int pressure = 0;
@@ -653,6 +654,7 @@ bool fetchCurrentWeather() {
 
   strlcpy(weather.condition, document["weather"][0]["main"] | "Unknown",
           sizeof(weather.condition));
+  weather.conditionId = document["weather"][0]["id"] | 0;
   weather.temperature = document["main"]["temp"] | 0.0F;
   weather.humidity = document["main"]["humidity"] | 0;
   weather.pressure = document["main"]["pressure"] | 0;
@@ -671,15 +673,16 @@ bool fetchCurrentWeather() {
                       speechAvailable && !quietHours && !temperatureAudioPlayed,
                       speech);
 
-  Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
-                weather.condition, weather.temperature, weather.humidity,
-                weather.pressure, weather.rainLastHour);
+  Serial.printf(
+      "Weather updated: %s (%d), %.1f C, %d %%, %d hPa, %.1f mm/h\n",
+      weather.condition, weather.conditionId, weather.temperature,
+      weather.humidity, weather.pressure, weather.rainLastHour);
   appendWeatherLog(weather, weather.observedAt);
   ambientPublishResult = ambientPublisher.publish(
       weather.observedAt, weather.temperature,
       weather.humidity, weather.pressure, weather.rainLastHour,
       temperatureAlerts.activeThreshold(weather.temperature),
-      isRainingCondition(weather.condition), WiFi.RSSI());
+      isRainingCondition(weather.condition), WiFi.RSSI(), weather.conditionId);
   drawMainScreen();
   return true;
 }

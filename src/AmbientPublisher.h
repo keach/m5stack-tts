@@ -18,5 +18,5 @@ class AmbientPublisher {
                                float temperature, int humidity, int pressure,
                                float rainLastHour,
                                int temperatureAlertThreshold, bool rainingNow,
-                               int wifiRssi);
+                               int wifiRssi, int weatherConditionId);
 };

@@ -31,7 +31,7 @@ void buildRecord(JsonDocument& record, time_t observedAt,
                  float temperature, int humidity,
                  int pressure, float rainLastHour,
                  int temperatureAlertThreshold, bool rainingNow,
-                 int wifiRssi) {
+                 int wifiRssi, int weatherConditionId) {
   char created[20];
   formatCreated(observedAt, created, sizeof(created));
   record["created"] = created;
@@ -42,6 +42,7 @@ void buildRecord(JsonDocument& record, time_t observedAt,
   record["d5"] = temperatureAlertThreshold;
   record["d6"] = rainingNow ? 1 : 0;
   record["d7"] = wifiRssi;
+  record["d8"] = weatherConditionId;
 }
 
 AmbientPublishResult postPayload(JsonDocument& payload, const char* endpoint) {
@@ -228,7 +229,7 @@ AmbientPublishResult sendQueuedBatch() {
 AmbientPublishResult AmbientPublisher::publish(
     time_t observedAt, float temperature, int humidity,
     int pressure, float rainLastHour, int temperatureAlertThreshold,
-    bool rainingNow, int wifiRssi) {
+    bool rainingNow, int wifiRssi, int weatherConditionId) {
   if (!credentialsAreSet()) {
     Serial.println("Ambient upload skipped because credentials are not set.");
     return AmbientPublishResult::CredentialsMissing;
@@ -240,7 +241,8 @@ AmbientPublishResult AmbientPublisher::publish(
 
   JsonDocument record;
   buildRecord(record, observedAt, temperature, humidity, pressure,
-              rainLastHour, temperatureAlertThreshold, rainingNow, wifiRssi);
+              rainLastHour, temperatureAlertThreshold, rainingNow, wifiRssi,
+              weatherConditionId);
 
   if (!recoverQueueFiles()) {
     return AmbientPublishResult::RequestFailed;

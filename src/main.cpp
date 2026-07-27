@@ -47,6 +47,7 @@ constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 
 struct WeatherData {
   char condition[32] = "--";
+  int cloudiness = -1;
   float temperature = 0;
   int humidity = 0;
   int pressure = 0;
@@ -58,6 +59,7 @@ struct WeatherData {
 struct ForecastEntry {
   time_t forecastAt = 0;
   char condition[24] = "--";
+  int cloudiness = -1;
   float temperature = 0;
   uint8_t precipitationProbability = 0;
   float rainThreeHours = 0;
@@ -88,6 +90,15 @@ enum class WeatherRequestSource {
   Scheduled,
 };
 
+enum class CloudinessCategory {
+  MostlyClear,
+  FewClouds,
+  Scattered,
+  MostlyCloudy,
+  Overcast,
+  Unknown,
+};
+
 WeatherData weather;
 ForecastData forecast;
 ForecastRequestStatus forecastRequestStatus =
@@ -109,6 +120,41 @@ TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 AmbientPublisher ambientPublisher;
 AmbientPublishResult ambientPublishResult = AmbientPublishResult::NotAttempted;
+
+CloudinessCategory classifyCloudiness(int cloudiness) {
+  if (cloudiness < 0 || cloudiness > 100) {
+    return CloudinessCategory::Unknown;
+  }
+  if (cloudiness <= 10) return CloudinessCategory::MostlyClear;
+  if (cloudiness <= 25) return CloudinessCategory::FewClouds;
+  if (cloudiness <= 50) return CloudinessCategory::Scattered;
+  if (cloudiness <= 84) return CloudinessCategory::MostlyCloudy;
+  return CloudinessCategory::Overcast;
+}
+
+const char* cloudinessForDisplay(int cloudiness) {
+  switch (classifyCloudiness(cloudiness)) {
+    case CloudinessCategory::MostlyClear:
+      return "Mostly clear";
+    case CloudinessCategory::FewClouds:
+      return "Few clouds";
+    case CloudinessCategory::Scattered:
+      return "Scattered";
+    case CloudinessCategory::MostlyCloudy:
+      return "Mostly cloudy";
+    case CloudinessCategory::Overcast:
+      return "Overcast";
+    case CloudinessCategory::Unknown:
+      return "Clouds";
+  }
+  return "Clouds";
+}
+
+const char* weatherConditionForDisplay(const char* condition, int cloudiness) {
+  return strcmp(condition, "Clouds") == 0
+             ? cloudinessForDisplay(cloudiness)
+             : condition;
+}
 
 bool showSplashScreen() {
   M5.Lcd.fillScreen(TFT_NAVY);
@@ -355,7 +401,9 @@ void drawWeather() {
   }
 
   M5.Lcd.setCursor(16, 76);
-  M5.Lcd.printf("Weather : %s", weather.condition);
+  M5.Lcd.printf("Weather : %s",
+                weatherConditionForDisplay(weather.condition,
+                                           weather.cloudiness));
   M5.Lcd.setCursor(16, 104);
   M5.Lcd.printf("Temp    : %.1f C", weather.temperature);
   M5.Lcd.setCursor(16, 132);
@@ -450,7 +498,9 @@ void drawForecast() {
       M5.Lcd.setCursor(16, y);
       M5.Lcd.printf("%02d/%02d %02d:%02d %s", forecastTime.tm_mon + 1,
                     forecastTime.tm_mday, forecastTime.tm_hour,
-                    forecastTime.tm_min, entry.condition);
+                    forecastTime.tm_min,
+                    weatherConditionForDisplay(entry.condition,
+                                               entry.cloudiness));
       M5.Lcd.setCursor(28, y + 17);
       M5.Lcd.printf("%.1f C/%u %%/%.1f mm", entry.temperature,
                     entry.precipitationProbability, entry.rainThreeHours);
@@ -484,9 +534,23 @@ void drawMainScreen() {
   }
 }
 
-const char* weatherConditionInJapanese(const char* condition) {
+const char* weatherConditionInJapanese(const char* condition, int cloudiness) {
   if (strcmp(condition, "Clear") == 0) return "晴れ";
-  if (strcmp(condition, "Clouds") == 0) return "曇り";
+  if (strcmp(condition, "Clouds") == 0) {
+    switch (classifyCloudiness(cloudiness)) {
+      case CloudinessCategory::MostlyClear:
+        return "ほぼ晴れ";
+      case CloudinessCategory::FewClouds:
+        return "雲は少なめ";
+      case CloudinessCategory::Scattered:
+        return "雲がまばら";
+      case CloudinessCategory::MostlyCloudy:
+        return "雲が多め";
+      case CloudinessCategory::Overcast:
+      case CloudinessCategory::Unknown:
+        return "曇り";
+    }
+  }
   if (strcmp(condition, "Rain") == 0) return "雨";
   if (strcmp(condition, "Drizzle") == 0) return "小雨";
   if (strcmp(condition, "Thunderstorm") == 0) return "雷雨";
@@ -533,7 +597,8 @@ void speakCurrentWeather() {
   snprintf(message, sizeof(message),
            "%s現在の天気は%sです。気温は%.1f度、湿度は%dパーセント、"
            "気圧は%sヘクトパスカル、1時間雨量は%sミリです。",
-           dateTimeText, weatherConditionInJapanese(weather.condition),
+           dateTimeText,
+           weatherConditionInJapanese(weather.condition, weather.cloudiness),
            weather.temperature, weather.humidity, pressureText, rainText);
   Serial.printf("Speaking: %s\n", message);
   if (!speech.speak(message)) {
@@ -568,7 +633,8 @@ void speakForecast() {
         message, sizeof(message),
         "%d月%d日%d時の予報は、%s、気温%.1f度、降水確率%dパーセント。",
         forecastTime.tm_mon + 1, forecastTime.tm_mday, forecastTime.tm_hour,
-        weatherConditionInJapanese(entry.condition), entry.temperature,
+        weatherConditionInJapanese(entry.condition, entry.cloudiness),
+        entry.temperature,
         entry.precipitationProbability);
     strlcat(message, rainPhrase, sizeof(message));
 
@@ -653,6 +719,9 @@ bool fetchCurrentWeather() {
 
   strlcpy(weather.condition, document["weather"][0]["main"] | "Unknown",
           sizeof(weather.condition));
+  weather.cloudiness =
+      document["clouds"]["all"].is<int>() ? document["clouds"]["all"].as<int>()
+                                           : -1;
   weather.temperature = document["main"]["temp"] | 0.0F;
   weather.humidity = document["main"]["humidity"] | 0;
   weather.pressure = document["main"]["pressure"] | 0;
@@ -671,9 +740,11 @@ bool fetchCurrentWeather() {
                       speechAvailable && !quietHours && !temperatureAudioPlayed,
                       speech);
 
-  Serial.printf("Weather updated: %s, %.1f C, %d %%, %d hPa, %.1f mm/h\n",
-                weather.condition, weather.temperature, weather.humidity,
-                weather.pressure, weather.rainLastHour);
+  Serial.printf(
+      "Weather updated: %s, cloudiness %d %%, %.1f C, %d %%, %d hPa, "
+      "%.1f mm/h\n",
+      weather.condition, weather.cloudiness, weather.temperature,
+      weather.humidity, weather.pressure, weather.rainLastHour);
   appendWeatherLog(weather, weather.observedAt);
   ambientPublishResult = ambientPublisher.publish(
       weather.observedAt, weather.temperature,
@@ -724,6 +795,7 @@ bool fetchForecast() {
     filter["list"][index]["dt"] = true;
     filter["list"][index]["main"]["temp"] = true;
     filter["list"][index]["weather"][0]["main"] = true;
+    filter["list"][index]["clouds"]["all"] = true;
     filter["list"][index]["pop"] = true;
     filter["list"][index]["rain"]["3h"] = true;
   }
@@ -754,6 +826,9 @@ bool fetchForecast() {
     entry.forecastAt = forecastAt;
     strlcpy(entry.condition, source["weather"][0]["main"] | "Unknown",
             sizeof(entry.condition));
+    entry.cloudiness =
+        source["clouds"]["all"].is<int>() ? source["clouds"]["all"].as<int>()
+                                           : -1;
     entry.temperature = source["main"]["temp"] | 0.0F;
     const float probability = source["pop"] | 0.0F;
     entry.precipitationProbability = static_cast<uint8_t>(
@@ -775,10 +850,12 @@ bool fetchForecast() {
                 static_cast<unsigned int>(forecast.count));
   for (size_t index = 0; index < forecast.count; ++index) {
     const ForecastEntry& entry = forecast.entries[index];
-    Serial.printf("  %lld: %s, %.1f C, PoP %u %%, rain %.1f mm/3h\n",
-                  static_cast<long long>(entry.forecastAt), entry.condition,
-                  entry.temperature, entry.precipitationProbability,
-                  entry.rainThreeHours);
+    Serial.printf(
+        "  %lld: %s, cloudiness %d %%, %.1f C, PoP %u %%, rain %.1f "
+        "mm/3h\n",
+        static_cast<long long>(entry.forecastAt), entry.condition,
+        entry.cloudiness, entry.temperature, entry.precipitationProbability,
+        entry.rainThreeHours);
   }
   return true;
 }

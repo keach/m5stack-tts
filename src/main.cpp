@@ -106,6 +106,7 @@ SettingsMode settingsMode;
 SpeechService speech;
 bool speechAvailable = false;
 bool automaticForecastSpeechActive = false;
+bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 AmbientPublisher ambientPublisher;
@@ -585,6 +586,9 @@ void speakForecast() {
       if (M5.BtnB.wasPressed()) {
         lastForecastInteraction = millis();
         speech.stop();
+        if (automaticForecastSpeechActive) {
+          scheduledForecastStopButtonConsumed = true;
+        }
         Serial.println("Forecast speech stopped by button B.");
         return;
       }
@@ -931,7 +935,9 @@ void loop() {
       updateWeather(WeatherRequestSource::ManualButton);
     }
   }
-  if (M5.BtnB.wasPressed()) {
+  if (scheduledForecastStopButtonConsumed) {
+    scheduledForecastStopButtonConsumed = false;
+  } else if (M5.BtnB.wasPressed()) {
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }

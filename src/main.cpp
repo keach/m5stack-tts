@@ -390,13 +390,23 @@ void drawWeather() {
   M5.Lcd.setTextSize(2);
   const int temperatureAlert =
       weather.valid ? temperatureAlerts.activeThreshold(weather.temperature) : 0;
-  M5.Lcd.setTextColor(temperatureAlert >= 35 ? TFT_RED
-                                             : temperatureAlert >= 30 ? TFT_ORANGE
-                                                                      : TFT_CYAN,
-                      TFT_BLACK);
+  if (temperatureAlert >= 40) {
+    M5.Lcd.fillRect(0, 40, 320, 28, TFT_RED);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
+  } else {
+    M5.Lcd.setTextColor(
+        temperatureAlert >= 35 ? TFT_RED
+                               : temperatureAlert >= 30 ? TFT_ORANGE
+                                                        : TFT_CYAN,
+        TFT_BLACK);
+  }
   M5.Lcd.setCursor(16, 44);
-  if (temperatureAlert > 0) {
-    M5.Lcd.printf("HIGH TEMP ALERT: %d C", temperatureAlert);
+  if (temperatureAlert >= 40) {
+    M5.Lcd.print("EXTREME HEAT: 40 C");
+  } else if (temperatureAlert >= 35) {
+    M5.Lcd.print("HIGH TEMP WARNING: 35 C");
+  } else if (temperatureAlert >= 30) {
+    M5.Lcd.print("HIGH TEMP CAUTION: 30 C");
   } else if (weather.valid && rainAlerts.isRainActive()) {
     M5.Lcd.printf("RAIN ALERT: %.1f mm", weather.rainLastHour);
   } else {

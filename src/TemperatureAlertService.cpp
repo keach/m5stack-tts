@@ -24,6 +24,7 @@ void TemperatureAlertService::saveState(const AlertState& state) {
 }
 
 int TemperatureAlertService::activeThreshold(float temperature) const {
+  if (temperature >= 40.0F) return 40;
   if (temperature >= 35.0F) return 35;
   if (temperature >= 30.0F) return 30;
   return 0;
@@ -63,7 +64,7 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
   }
   const time_t now = time(nullptr);
   const bool timeIsValid = now >= MINIMUM_VALID_TIME;
-  bool triggered[ALERT_COUNT] = {false, false};
+  bool triggered[ALERT_COUNT] = {};
   int highestTriggeredIndex = -1;
 
   for (int index = 0; index < ALERT_COUNT; ++index) {
@@ -111,13 +112,23 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
   }
 
   const int threshold = alerts_[highestTriggeredIndex].threshold;
-  char message[160];
-  snprintf(message, sizeof(message),
-           threshold >= 35
-               ? "高温警告です。現在の気温は%.1f度です。熱中症に十分注意してください。"
-               : "高温注意です。現在の気温は%.1f度です。熱中症に注意してください。",
-           temperature);
-  speech.playAlertTone();
+  char message[200];
+  int beepDurationMs = 90;
+  int beepCount = 2;
+  const char* messageFormat =
+      "高温注意です。現在の気温は%.1f度です。熱中症に注意してください。";
+  if (threshold >= 40) {
+    beepDurationMs = 270;
+    beepCount = 3;
+    messageFormat =
+        "危険な暑さです。現在の気温は%.1f度です。直ちに涼しい場所へ移動し、熱中症から身を守ってください。";
+  } else if (threshold >= 35) {
+    beepDurationMs = 180;
+    messageFormat =
+        "高温警告です。現在の気温は%.1f度です。熱中症に十分注意してください。";
+  }
+  snprintf(message, sizeof(message), messageFormat, temperature);
+  speech.playAlertTone(beepDurationMs, beepCount);
   speech.speak(message);
   return true;
 }

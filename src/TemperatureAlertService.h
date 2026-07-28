@@ -25,11 +25,12 @@ class TemperatureAlertService {
                  time_t alertTime);
   void saveState(const AlertState& state);
 
-  static constexpr int ALERT_COUNT = 2;
+  static constexpr int ALERT_COUNT = 3;
   static constexpr time_t REARM_DELAY_SECONDS = 3 * 60 * 60;
   AlertState alerts_[ALERT_COUNT] = {
       {30, "armed30", "last30", true, 0},
       {35, "armed35", "last35", true, 0},
+      {40, "armed40", "last40", true, 0},
   };
   Preferences preferences_;
 };

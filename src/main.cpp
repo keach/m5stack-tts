@@ -117,6 +117,8 @@ AppSettings appSettings;
 SettingsMode settingsMode;
 SpeechService speech;
 bool speechAvailable = false;
+bool automaticForecastSpeechActive = false;
+bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 AmbientPublisher ambientPublisher;
@@ -651,12 +653,64 @@ void speakForecast() {
       if (M5.BtnB.wasPressed()) {
         lastForecastInteraction = millis();
         speech.stop();
+        if (automaticForecastSpeechActive) {
+          scheduledForecastStopButtonConsumed = true;
+        }
         Serial.println("Forecast speech stopped by button B.");
         return;
       }
       delay(10);
     }
   }
+}
+
+uint32_t localDateKey(const tm& localTime) {
+  return static_cast<uint32_t>(localTime.tm_year + 1900) * 10000U +
+         static_cast<uint32_t>(localTime.tm_mon + 1) * 100U +
+         static_cast<uint32_t>(localTime.tm_mday);
+}
+
+void runScheduledForecastSpeech() {
+  tm localTime = {};
+  if (!getLocalTime(&localTime, 10)) {
+    return;
+  }
+
+  const uint16_t minuteOfDay =
+      static_cast<uint16_t>(localTime.tm_hour * 60 + localTime.tm_min);
+  const uint32_t today = localDateKey(localTime);
+  bool matched = false;
+  for (size_t index = 0; index < AppSettings::FORECAST_SCHEDULE_COUNT;
+       ++index) {
+    const AppSettings::ForecastSchedule& schedule =
+        appSettings.forecastSchedule(index);
+    if (!schedule.enabled || schedule.minuteOfDay != minuteOfDay ||
+        schedule.lastRunDate == today) {
+      continue;
+    }
+    matched = true;
+    appSettings.markForecastScheduleRun(index, today);
+  }
+  if (!matched) {
+    return;
+  }
+
+  if (!speechAvailable || !forecast.valid || forecast.count == 0) {
+    Serial.println(
+        "Scheduled forecast speech skipped because audio or forecast is "
+        "unavailable.");
+    return;
+  }
+
+  automaticForecastSpeechActive = true;
+  if (speech.isSpeaking()) {
+    speech.stop();
+  }
+  Serial.printf("Starting scheduled forecast speech for %02d:%02d JST.\n",
+                localTime.tm_hour, localTime.tm_min);
+  speakForecast();
+  automaticForecastSpeechActive = false;
+  Serial.println("Scheduled forecast speech finished.");
 }
 
 void toggleScreenSpeech() {
@@ -864,6 +918,11 @@ bool fetchForecast() {
 }
 
 bool updateWeather(WeatherRequestSource source) {
+  if (automaticForecastSpeechActive) {
+    Serial.println(
+        "Weather update deferred during scheduled forecast speech.");
+    return false;
+  }
   const unsigned long now = millis();
   if (source == WeatherRequestSource::ManualButton && weatherAttempted &&
       now - lastWeatherAttempt < MANUAL_WEATHER_MIN_INTERVAL_MS) {
@@ -935,6 +994,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  runScheduledForecastSpeech();
 
   if (M5.BtnA.wasPressed()) {
     buttonAPressDetectedAt = millis();
@@ -955,7 +1015,9 @@ void loop() {
       updateWeather(WeatherRequestSource::ManualButton);
     }
   }
-  if (M5.BtnB.wasPressed()) {
+  if (scheduledForecastStopButtonConsumed) {
+    scheduledForecastStopButtonConsumed = false;
+  } else if (M5.BtnB.wasPressed()) {
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }

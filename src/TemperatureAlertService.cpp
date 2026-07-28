@@ -56,7 +56,11 @@ bool TemperatureAlertService::appendLog(float temperature, int threshold,
 }
 
 bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
-                                       SpeechService& speech) {
+                                       SpeechService& speech,
+                                       bool* alertTriggered) {
+  if (alertTriggered != nullptr) {
+    *alertTriggered = false;
+  }
   const time_t now = time(nullptr);
   const bool timeIsValid = now >= MINIMUM_VALID_TIME;
   bool triggered[ALERT_COUNT] = {false, false};
@@ -87,6 +91,9 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
 
   if (highestTriggeredIndex < 0) {
     return false;
+  }
+  if (alertTriggered != nullptr) {
+    *alertTriggered = true;
   }
 
   const bool shouldPlayAudio = audioAllowed && timeIsValid;

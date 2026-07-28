@@ -51,12 +51,12 @@ bool RainAlertService::appendLog(const char* condition, float rainLastHour,
   return written > 0;
 }
 
-void RainAlertService::evaluate(bool rainingNow, const char* condition,
+bool RainAlertService::evaluate(bool rainingNow, const char* condition,
                                 float rainLastHour, bool audioAllowed,
                                 SpeechService& speech) {
   if (!rainingNow) {
     if (!rainActive_) {
-      return;
+      return false;
     }
     if (dryObservations_ < DRY_OBSERVATIONS_TO_REARM) {
       ++dryObservations_;
@@ -68,7 +68,7 @@ void RainAlertService::evaluate(bool rainingNow, const char* condition,
       saveState();
       Serial.println("Rain alert rearmed after two dry observations.");
     }
-    return;
+    return false;
   }
 
   if (rainActive_) {
@@ -76,7 +76,7 @@ void RainAlertService::evaluate(bool rainingNow, const char* condition,
       dryObservations_ = 0;
       saveState();
     }
-    return;
+    return false;
   }
 
   rainActive_ = true;
@@ -91,7 +91,7 @@ void RainAlertService::evaluate(bool rainingNow, const char* condition,
                 condition, rainLastHour, shouldPlayAudio ? "yes" : "no");
 
   if (!shouldPlayAudio) {
-    return;
+    return true;
   }
 
   char rainText[24];
@@ -103,6 +103,7 @@ void RainAlertService::evaluate(bool rainingNow, const char* condition,
            rainText);
   speech.playAlertTone();
   speech.speak(message);
+  return true;
 }
 
 bool RainAlertService::isRainActive() const { return rainActive_; }

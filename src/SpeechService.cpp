@@ -152,16 +152,14 @@ bool SpeechService::speak(const char* utf8Text, int speed) {
   return true;
 }
 
-bool SpeechService::playAlertTone() {
+bool SpeechService::playAlertTone(int beepDurationMs, int beepCount) {
   if (!initialized_) {
     return false;
   }
 
   stop();
   constexpr int FREQUENCY_HZ = 880;
-  constexpr int BEEP_DURATION_MS = 180;
   constexpr int GAP_DURATION_MS = 120;
-  constexpr int BEEP_COUNT = 3;
   constexpr int16_t AMPLITUDE = 12000;
   constexpr size_t CHUNK_SAMPLES = 128;
   uint16_t output[CHUNK_SAMPLES * 2];
@@ -193,9 +191,11 @@ bool SpeechService::playAlertTone() {
     }
   };
 
-  for (int beep = 0; beep < BEEP_COUNT; ++beep) {
-    writeLevel(AUDIO_SAMPLE_RATE * BEEP_DURATION_MS / 1000, AMPLITUDE);
-    if (beep + 1 < BEEP_COUNT) {
+  beepDurationMs = max(beepDurationMs, 1);
+  beepCount = max(beepCount, 1);
+  for (int beep = 0; beep < beepCount; ++beep) {
+    writeLevel(AUDIO_SAMPLE_RATE * beepDurationMs / 1000, AMPLITUDE);
+    if (beep + 1 < beepCount) {
       writeLevel(AUDIO_SAMPLE_RATE * GAP_DURATION_MS / 1000, 0);
     }
   }

@@ -11,7 +11,7 @@ class SpeechService {
 
   bool begin();
   bool speak(const char* utf8Text, int speed = 100);
-  bool playAlertTone();
+  bool playAlertTone(int beepDurationMs = 90, int beepCount = 2);
   void stop();
   bool isSpeaking() const;
   void setVolumePercent(uint8_t volumePercent);

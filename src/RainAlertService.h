@@ -8,7 +8,7 @@
 class RainAlertService {
  public:
   void begin();
-  void evaluate(bool rainingNow, const char* condition, float rainLastHour,
+  bool evaluate(bool rainingNow, const char* condition, float rainLastHour,
                 bool audioAllowed, SpeechService& speech);
   bool isRainActive() const;
 

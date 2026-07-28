@@ -30,6 +30,8 @@ constexpr unsigned long MANUAL_WEATHER_MIN_INTERVAL_MS = 30UL * 1000UL;
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
 constexpr unsigned long FORECAST_SCREEN_TIMEOUT_MS = 60UL * 1000UL;
+constexpr unsigned long DISPLAY_SLEEP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
+constexpr uint8_t DISPLAY_BRIGHTNESS = 100;
 constexpr unsigned long SPLASH_DURATION_MS = 3000;
 constexpr unsigned long SETTINGS_ENTRY_HOLD_MS = 1000;
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
@@ -109,6 +111,8 @@ unsigned long lastForecastInteraction = 0;
 unsigned long lastWeatherAttempt = 0;
 bool weatherAttempted = false;
 unsigned long lastDisplayUpdate = 0;
+unsigned long lastDisplayActivity = 0;
+bool displaySleeping = false;
 unsigned long buttonAPressDetectedAt = 0;
 bool buttonAConfirmationPending = false;
 ClockDisplayPrecision clockDisplayPrecision = ClockDisplayPrecision::Minutes;
@@ -344,6 +348,9 @@ void syncTimeWithNtp() {
 }
 
 void drawDateTime() {
+  if (displaySleeping) {
+    return;
+  }
   tm timeInfo = {};
   char formattedTime[32] = "Time unavailable";
   if (getLocalTime(&timeInfo, 10)) {
@@ -376,6 +383,9 @@ void drawDateTime() {
 }
 
 void drawWeather() {
+  if (displaySleeping) {
+    return;
+  }
   M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
   M5.Lcd.setTextSize(2);
   const int temperatureAlert =
@@ -464,6 +474,9 @@ void drawWeather() {
 }
 
 void drawForecast() {
+  if (displaySleeping) {
+    return;
+  }
   M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
   M5.Lcd.setTextSize(2);
   M5.Lcd.setTextColor(forecastRequestStatus == ForecastRequestStatus::Failed
@@ -530,11 +543,38 @@ void drawForecast() {
 }
 
 void drawMainScreen() {
+  if (displaySleeping) {
+    return;
+  }
   if (mainScreen == MainScreen::Forecast) {
     drawForecast();
   } else {
     drawWeather();
   }
+}
+
+void noteDisplayActivity() { lastDisplayActivity = millis(); }
+
+void wakeDisplay() {
+  noteDisplayActivity();
+  if (displaySleeping) {
+    M5.Lcd.wakeup();
+    M5.Lcd.setBrightness(DISPLAY_BRIGHTNESS);
+    displaySleeping = false;
+    Serial.println("Display woke up.");
+  }
+  drawDateTime();
+  drawMainScreen();
+}
+
+void sleepDisplay() {
+  if (displaySleeping) {
+    return;
+  }
+  displaySleeping = true;
+  M5.Lcd.setBrightness(0);
+  M5.Lcd.sleep();
+  Serial.println("Display entered sleep mode.");
 }
 
 const char* weatherConditionInJapanese(const char* condition, int cloudiness) {
@@ -706,6 +746,9 @@ void runScheduledForecastSpeech() {
   if (speech.isSpeaking()) {
     speech.stop();
   }
+  mainScreen = MainScreen::Forecast;
+  lastForecastInteraction = millis();
+  wakeDisplay();
   Serial.printf("Starting scheduled forecast speech for %02d:%02d JST.\n",
                 localTime.tm_hour, localTime.tm_min);
   speakForecast();
@@ -789,12 +832,18 @@ bool fetchCurrentWeather() {
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
+  bool temperatureAlertTriggered = false;
   const bool temperatureAudioPlayed = temperatureAlerts.evaluate(
-      weather.temperature, speechAvailable && !quietHours, speech);
-  rainAlerts.evaluate(isRainingCondition(weather.condition), weather.condition,
-                      weather.rainLastHour,
-                      speechAvailable && !quietHours && !temperatureAudioPlayed,
-                      speech);
+      weather.temperature, speechAvailable && !quietHours, speech,
+      &temperatureAlertTriggered);
+  const bool rainAlertTriggered = rainAlerts.evaluate(
+      isRainingCondition(weather.condition), weather.condition,
+      weather.rainLastHour,
+      speechAvailable && !quietHours && !temperatureAudioPlayed, speech);
+  if (temperatureAlertTriggered || rainAlertTriggered) {
+    mainScreen = MainScreen::CurrentWeather;
+    wakeDisplay();
+  }
 
   Serial.printf(
       "Weather updated: %s (%d), cloudiness %d %%, %.1f C, %d %%, %d hPa, "
@@ -958,6 +1007,8 @@ void setup() {
   // so that card detection and errors can be handled explicitly.
   M5.begin(true, false, true);
   Serial.begin(115200);
+  M5.Lcd.setBrightness(DISPLAY_BRIGHTNESS);
+  noteDisplayActivity();
 
   appSettings.begin();
   clockDisplayPrecision = appSettings.clockPrecision();
@@ -987,6 +1038,7 @@ void setup() {
     settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
     clockDisplayPrecision = appSettings.clockPrecision();
     speech.setVolumePercent(appSettings.volumePercent());
+    noteDisplayActivity();
     drawDateTime();
     drawMainScreen();
   }
@@ -994,6 +1046,14 @@ void setup() {
 
 void loop() {
   M5.update();
+
+  if (displaySleeping &&
+      (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed())) {
+    buttonAConfirmationPending = false;
+    wakeDisplay();
+    return;
+  }
+
   runScheduledForecastSpeech();
 
   if (M5.BtnA.wasPressed()) {
@@ -1009,6 +1069,7 @@ void loop() {
     } else if (millis() - buttonAPressDetectedAt >= BUTTON_CONFIRMATION_MS) {
       buttonAConfirmationPending = false;
       Serial.println("Button A press confirmed.");
+      noteDisplayActivity();
       if (mainScreen == MainScreen::Forecast) {
         lastForecastInteraction = millis();
       }
@@ -1018,12 +1079,14 @@ void loop() {
   if (scheduledForecastStopButtonConsumed) {
     scheduledForecastStopButtonConsumed = false;
   } else if (M5.BtnB.wasPressed()) {
+    noteDisplayActivity();
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }
     toggleScreenSpeech();
   }
   if (M5.BtnC.wasPressed()) {
+    noteDisplayActivity();
     mainScreen = mainScreen == MainScreen::CurrentWeather
                      ? MainScreen::Forecast
                      : MainScreen::CurrentWeather;
@@ -1046,5 +1109,9 @@ void loop() {
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL_MS) {
     lastDisplayUpdate = now;
     drawDateTime();
+  }
+  if (!displaySleeping &&
+      now - lastDisplayActivity >= DISPLAY_SLEEP_TIMEOUT_MS) {
+    sleepDisplay();
   }
 }

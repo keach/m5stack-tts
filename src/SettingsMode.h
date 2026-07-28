@@ -27,7 +27,8 @@ class SettingsMode {
 
   bool confirmedPress(Button& button, ButtonConfirmation& confirmation);
   void drawMenu(int selectedItem, ClockDisplayPrecision clockPrecision,
-                uint8_t volumePercent);
+                uint8_t volumePercent,
+                const AppSettings::ForecastSchedule* forecastSchedules);
   void showDiagnostics(const DiagnosticStatus& diagnostics);
   void showMessage(const char* title, const char* detail);
 

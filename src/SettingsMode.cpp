@@ -2,11 +2,14 @@
 
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
-constexpr int MENU_ITEM_COUNT = 6;
+constexpr int MENU_ITEM_COUNT = 9;
 
 enum MenuItem {
   MENU_CLOCK,
   MENU_VOLUME,
+  MENU_FORECAST_1,
+  MENU_FORECAST_2,
+  MENU_FORECAST_3,
   MENU_ALARM_TEST,
   MENU_SPEECH_TEST,
   MENU_DIAGNOSTICS,
@@ -36,7 +39,9 @@ bool SettingsMode::confirmedPress(Button& button,
 
 void SettingsMode::drawMenu(int selectedItem,
                             ClockDisplayPrecision clockPrecision,
-                            uint8_t volumePercent) {
+                            uint8_t volumePercent,
+                            const AppSettings::ForecastSchedule*
+                                forecastSchedules) {
   M5.Lcd.fillScreen(TFT_BLACK);
   M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
@@ -45,12 +50,12 @@ void SettingsMode::drawMenu(int selectedItem,
   M5.Lcd.print("SETTINGS / DIAG");
 
   for (int item = 0; item < MENU_ITEM_COUNT; ++item) {
-    const int y = 42 + item * 29;
+    const int y = 37 + item * 20;
     const bool selected = item == selectedItem;
     const uint16_t background = selected ? TFT_DARKCYAN : TFT_BLACK;
-    M5.Lcd.fillRect(5, y - 3, 310, 25, background);
+    M5.Lcd.fillRect(5, y - 2, 310, 19, background);
     M5.Lcd.setTextColor(selected ? TFT_WHITE : TFT_LIGHTGREY, background);
-    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextSize(1);
     M5.Lcd.setCursor(10, y);
 
     switch (item) {
@@ -63,6 +68,21 @@ void SettingsMode::drawMenu(int selectedItem,
       case MENU_VOLUME:
         M5.Lcd.printf("Volume: %u%%", volumePercent);
         break;
+      case MENU_FORECAST_1:
+      case MENU_FORECAST_2:
+      case MENU_FORECAST_3: {
+        const int scheduleIndex = item - MENU_FORECAST_1;
+        const AppSettings::ForecastSchedule& schedule =
+            forecastSchedules[scheduleIndex];
+        if (schedule.enabled) {
+          M5.Lcd.printf("Forecast %d: %02u:%02u", scheduleIndex + 1,
+                        schedule.minuteOfDay / 60,
+                        schedule.minuteOfDay % 60);
+        } else {
+          M5.Lcd.printf("Forecast %d: Off", scheduleIndex + 1);
+        }
+        break;
+      }
       case MENU_ALARM_TEST:
         M5.Lcd.print("Alarm test");
         break;
@@ -151,9 +171,16 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
                        const DiagnosticStatus& diagnostics) {
   ClockDisplayPrecision draftClockPrecision = settings.clockPrecision();
   uint8_t draftVolume = settings.volumePercent();
+  AppSettings::ForecastSchedule
+      draftForecastSchedules[AppSettings::FORECAST_SCHEDULE_COUNT];
+  for (size_t index = 0; index < AppSettings::FORECAST_SCHEDULE_COUNT;
+       ++index) {
+    draftForecastSchedules[index] = settings.forecastSchedule(index);
+  }
   int selectedItem = MENU_CLOCK;
   speech.setVolumePercent(draftVolume);
-  drawMenu(selectedItem, draftClockPrecision, draftVolume);
+  drawMenu(selectedItem, draftClockPrecision, draftVolume,
+           draftForecastSchedules);
 
   while (true) {
     M5.update();
@@ -168,7 +195,8 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
       selectedItem = previousPressed
                          ? (selectedItem + MENU_ITEM_COUNT - 1) % MENU_ITEM_COUNT
                          : (selectedItem + 1) % MENU_ITEM_COUNT;
-      drawMenu(selectedItem, draftClockPrecision, draftVolume);
+      drawMenu(selectedItem, draftClockPrecision, draftVolume,
+               draftForecastSchedules);
     }
 
     if (selectPressed) {
@@ -183,6 +211,21 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           draftVolume = draftVolume >= 100 ? 0 : draftVolume + 10;
           speech.setVolumePercent(draftVolume);
           break;
+        case MENU_FORECAST_1:
+        case MENU_FORECAST_2:
+        case MENU_FORECAST_3: {
+          AppSettings::ForecastSchedule& schedule =
+              draftForecastSchedules[selectedItem - MENU_FORECAST_1];
+          if (!schedule.enabled) {
+            schedule.enabled = true;
+            schedule.minuteOfDay = 0;
+          } else if (schedule.minuteOfDay >= 23 * 60 + 45) {
+            schedule.enabled = false;
+          } else {
+            schedule.minuteOfDay += 15;
+          }
+          break;
+        }
         case MENU_ALARM_TEST:
           if (speechAvailable) {
             speech.playAlertTone();
@@ -206,11 +249,13 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           if (speech.isSpeaking()) {
             speech.stop();
           }
-          settings.save(draftClockPrecision, draftVolume);
+          settings.save(draftClockPrecision, draftVolume,
+                        draftForecastSchedules);
           showMessage("SETTINGS SAVED", "Returning to weather");
           return;
       }
-      drawMenu(selectedItem, draftClockPrecision, draftVolume);
+      drawMenu(selectedItem, draftClockPrecision, draftVolume,
+               draftForecastSchedules);
     }
 
     delay(10);

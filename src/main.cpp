@@ -13,6 +13,7 @@
 #include "AmbientPublisher.h"
 #include "AppSettings.h"
 #include "RainAlertService.h"
+#include "RainForecastAlertService.h"
 #include "SettingsMode.h"
 #include "SpeechService.h"
 #include "SpeechNumberFormatter.h"
@@ -125,6 +126,8 @@ bool automaticForecastSpeechActive = false;
 bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
+RainForecastAlertService rainForecastAlerts;
+bool higherPriorityAlertTriggeredThisUpdate = false;
 AmbientPublisher ambientPublisher;
 AmbientPublishResult ambientPublishResult = AmbientPublishResult::NotAttempted;
 
@@ -409,6 +412,9 @@ void drawWeather() {
     M5.Lcd.print("HIGH TEMP CAUTION: 30 C");
   } else if (weather.valid && rainAlerts.isRainActive()) {
     M5.Lcd.printf("RAIN ALERT: %.1f mm", weather.rainLastHour);
+  } else if (rainForecastAlerts.isActive()) {
+    M5.Lcd.printf("RAIN FORECAST: %u %%",
+                  rainForecastAlerts.probabilityPercent());
   } else {
     M5.Lcd.println("CURRENT WEATHER");
   }
@@ -494,7 +500,13 @@ void drawForecast() {
                           : TFT_CYAN,
                       TFT_BLACK);
   M5.Lcd.setCursor(16, 40);
-  M5.Lcd.print("WEATHER FORECAST");
+  if (rainForecastAlerts.isActive() &&
+      forecastRequestStatus != ForecastRequestStatus::Loading) {
+    M5.Lcd.printf("RAIN FORECAST: %u %%",
+                  rainForecastAlerts.probabilityPercent());
+  } else {
+    M5.Lcd.print("WEATHER FORECAST");
+  }
 
   M5.Lcd.setTextSize(1);
   if (forecastRequestStatus == ForecastRequestStatus::Loading) {
@@ -850,6 +862,8 @@ bool fetchCurrentWeather() {
       isRainingCondition(weather.condition), weather.condition,
       weather.rainLastHour,
       speechAvailable && !quietHours && !temperatureAudioPlayed, speech);
+  higherPriorityAlertTriggeredThisUpdate =
+      temperatureAlertTriggered || rainAlertTriggered;
   if (temperatureAlertTriggered || rainAlertTriggered) {
     mainScreen = MainScreen::CurrentWeather;
     wakeDisplay();
@@ -973,6 +987,30 @@ bool fetchForecast() {
         entry.cloudiness, entry.temperature, entry.precipitationProbability,
         entry.rainThreeHours);
   }
+
+  const ForecastEntry& nearest = forecast.entries[0];
+  constexpr uint8_t RAIN_FORECAST_PROBABILITY_THRESHOLD = 50;
+  constexpr float RAIN_FORECAST_AMOUNT_THRESHOLD_MM = 0.1F;
+  const bool forecastMatches =
+      nearest.precipitationProbability >=
+          RAIN_FORECAST_PROBABILITY_THRESHOLD &&
+      nearest.rainThreeHours >= RAIN_FORECAST_AMOUNT_THRESHOLD_MM;
+  tm localTime = {};
+  const bool timeAvailable = getLocalTime(&localTime, 10);
+  const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
+  const bool rainingNow =
+      weather.valid && isRainingCondition(weather.condition);
+  const bool rainForecastTriggered = rainForecastAlerts.evaluate(
+      forecastMatches, rainingNow, nearest.forecastAt,
+      nearest.precipitationProbability, nearest.rainThreeHours,
+      speechAvailable && !quietHours &&
+          !higherPriorityAlertTriggeredThisUpdate && !speech.isSpeaking(),
+      speech);
+  if (rainForecastTriggered) {
+    mainScreen = MainScreen::Forecast;
+    lastForecastInteraction = millis();
+    wakeDisplay();
+  }
   return true;
 }
 
@@ -1005,6 +1043,7 @@ bool updateWeather(WeatherRequestSource source) {
     return false;
   }
 
+  higherPriorityAlertTriggeredThisUpdate = false;
   const bool currentUpdated = fetchCurrentWeather();
   const bool forecastUpdated = fetchForecast();
   drawMainScreen();
@@ -1029,6 +1068,7 @@ void setup() {
   speechAvailable = storageAvailable && speech.begin();
   temperatureAlerts.begin();
   rainAlerts.begin();
+  rainForecastAlerts.begin();
   connectToWiFi();
   syncTimeWithNtp();
   drawDateTime();

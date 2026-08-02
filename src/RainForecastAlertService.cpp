@@ -16,6 +16,8 @@ constexpr char PROBABILITY_KEY[] = "probability";
 constexpr char RAIN_KEY[] = "rain_3h";
 constexpr char LOG_PATH[] = "/rain_forecast_alerts.csv";
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
+constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
+constexpr uint8_t LOG_RETRY_LIMIT = 3;
 }  // namespace
 
 void RainForecastAlertService::begin() {
@@ -142,8 +144,11 @@ bool RainForecastAlertService::evaluate(bool forecastMatches, bool rainingNow,
   const time_t now = time(nullptr);
   const bool shouldPlayAudio =
       audioAllowed && now >= MINIMUM_VALID_TIME;
-  appendLog(forecastAt, probabilityPercent, rainThreeHours,
-            shouldPlayAudio, now);
+  if (!appendLog(forecastAt, probabilityPercent, rainThreeHours,
+                 shouldPlayAudio, now)) {
+    scheduleLogRetry(forecastAt, probabilityPercent, rainThreeHours,
+                     shouldPlayAudio, now);
+  }
   Serial.printf(
       "Rain forecast alert: %u %%, %.1f mm/3h, audio=%s\n",
       probabilityPercent, rainThreeHours,
@@ -167,6 +172,39 @@ bool RainForecastAlertService::evaluate(bool forecastMatches, bool rainingNow,
   return true;
 }
 
+void RainForecastAlertService::scheduleLogRetry(
+    time_t forecastAt, uint8_t probabilityPercent, float rainThreeHours,
+    bool audioPlayed, time_t alertTime) {
+  if (pendingLog_.active) {
+    Serial.println("Rain forecast alert log retry is already pending.");
+    return;
+  }
+  pendingLog_.forecastAt = forecastAt;
+  pendingLog_.probabilityPercent = probabilityPercent;
+  pendingLog_.rainThreeHours = rainThreeHours;
+  pendingLog_.audioPlayed = audioPlayed;
+  pendingLog_.alertTime = alertTime;
+  pendingLog_.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
+  pendingLog_.retryCount = 0;
+  pendingLog_.active = true;
+}
+void RainForecastAlertService::processPendingLog() {
+  if (!pendingLog_.active ||
+      static_cast<long>(millis() - pendingLog_.nextRetryAt) < 0) return;
+  if (appendLog(pendingLog_.forecastAt, pendingLog_.probabilityPercent,
+                pendingLog_.rainThreeHours, pendingLog_.audioPlayed,
+                pendingLog_.alertTime)) {
+    pendingLog_.active = false;
+    return;
+  }
+  ++pendingLog_.retryCount;
+  if (pendingLog_.retryCount >= LOG_RETRY_LIMIT) {
+    pendingLog_.active = false;
+    Serial.println("Rain forecast alert log retry limit reached.");
+    return;
+  }
+  pendingLog_.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
+}
 bool RainForecastAlertService::isActive() const { return active_; }
 
 uint8_t RainForecastAlertService::probabilityPercent() const {

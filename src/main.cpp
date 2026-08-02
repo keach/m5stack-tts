@@ -50,6 +50,8 @@ constexpr int SD_MISO_PIN = 19;
 constexpr int SD_MOSI_PIN = 23;
 constexpr uint32_t SD_FREQUENCY_HZ = 25000000;
 constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
+constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
+constexpr uint8_t LOG_RETRY_LIMIT = 3;
 
 struct WeatherData {
   char condition[32] = "--";
@@ -137,6 +139,15 @@ ThingSpeakPublisher thingSpeakPublisher;
 ThingSpeakPublishResult thingSpeakPublishResult =
     ThingSpeakPublishResult::NotAttempted;
 WebDownloadServer webDownloadServer;
+
+struct PendingWeatherLog {
+  WeatherData data;
+  time_t observedAt = 0;
+  unsigned long nextRetryAt = 0;
+  uint8_t retryCount = 0;
+  bool active = false;
+};
+PendingWeatherLog pendingWeatherLog;
 
 CloudinessCategory classifyCloudiness(int cloudiness) {
   if (cloudiness < 0 || cloudiness > 100) {
@@ -246,7 +257,7 @@ bool initializeStorage() {
   return true;
 }
 
-bool appendWeatherLog(const WeatherData& data, time_t observedAt) {
+bool writeWeatherLog(const WeatherData& data, time_t observedAt) {
   if (!storageAvailable) {
     return false;
   }
@@ -291,6 +302,42 @@ bool appendWeatherLog(const WeatherData& data, time_t observedAt) {
 
   Serial.printf("Weather data appended to %s.\n", WEATHER_LOG_PATH);
   return true;
+}
+
+void scheduleWeatherLogRetry(const WeatherData& data, time_t observedAt) {
+  if (pendingWeatherLog.active) {
+    Serial.println("Weather log retry is already pending; new retry was skipped.");
+    return;
+  }
+  pendingWeatherLog.data = data;
+  pendingWeatherLog.observedAt = observedAt;
+  pendingWeatherLog.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
+  pendingWeatherLog.retryCount = 0;
+  pendingWeatherLog.active = true;
+  Serial.println("Weather log retry scheduled in 1 minute.");
+}
+
+bool appendWeatherLog(const WeatherData& data, time_t observedAt) {
+  if (writeWeatherLog(data, observedAt)) return true;
+  scheduleWeatherLogRetry(data, observedAt);
+  return false;
+}
+
+void processWeatherLogRetry() {
+  if (!pendingWeatherLog.active ||
+      static_cast<long>(millis() - pendingWeatherLog.nextRetryAt) < 0) return;
+  if (writeWeatherLog(pendingWeatherLog.data, pendingWeatherLog.observedAt)) {
+    pendingWeatherLog.active = false;
+    Serial.println("Weather log retry succeeded.");
+    return;
+  }
+  ++pendingWeatherLog.retryCount;
+  if (pendingWeatherLog.retryCount >= LOG_RETRY_LIMIT) {
+    pendingWeatherLog.active = false;
+    Serial.println("Weather log retry limit reached; pending record discarded.");
+    return;
+  }
+  pendingWeatherLog.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
 }
 
 void connectToWiFi() {
@@ -1154,6 +1201,10 @@ void setup() {
 void loop() {
   M5.update();
   webDownloadServer.handleClient();
+  processWeatherLogRetry();
+  temperatureAlerts.processPendingLogs();
+  rainAlerts.processPendingLog();
+  rainForecastAlerts.processPendingLog();
 
   if (displaySleeping &&
       (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed())) {

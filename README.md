@@ -17,7 +17,7 @@ M5Stack Basic（ESP32）向けのPlatformIOプロジェクトです。
 - 現在天気・予報の `Clouds` を雲量に応じた5段階の表示・読み上げへ細分化
 - 起動時・10分ごとの自動更新と、ボタンAによる手動更新
 - microSDカードの初期化と、天気情報の `/weather.csv` への記録
-- 計測時刻を指定したAmbientへの気象データ送信
+- 計測時刻を指定したAmbient・ThingSpeakへの気象データ送信と二重送信
 - AquesTalk ESP32 Small辞書版を使った日時・天気の読み上げ
 - ボタンBによる表示中画面の読み上げ開始・停止と、ボタンCによる現在天気・予報画面の切替
 - 5分間無操作時の画面スリープと、ボタン・アラート・定時予報読み上げによる自動復帰
@@ -87,6 +87,32 @@ constexpr char AMBIENT_WRITE_KEY[] = "your-write-key";
 Ambientには、`d1`から順に気温、湿度、気圧、直近1時間雨量、高温アラート閾値、現在の降雨状態、Wi-Fi RSSI、OpenWeatherのweather condition IDを送信します。`d8` はOpenWeatherが定義する数値の天気分類で、例えば晴天は`800`、雲は`801`〜`804`、雨は`500`番台です。すべての送信でOpenWeather APIから正常に気象情報を取得した時刻を `created` として指定し、画面下部にも同じ時刻を `API Fetched` として `yyyy.mm.dd. hh:mm` 形式でAmbient送信結果とともに表示します。時刻が同期されていない場合はAmbient送信を行わず、SDカードへの記録は継続します。
 
 Ambientへの送信に失敗したデータは、microSDの `/ambient_queue.ndjson` へ保存します。次回の天気更新時に新しいデータと合わせ、最大10件ずつAmbientの一括送信APIへ再送します。送信に成功したレコードだけをキューから除去します。応答が失われた場合などはAmbient側に同じ `created` のデータが重複する可能性があります。
+
+ThingSpeakへ送信する場合は、サンプルをコピーし、チャネルIDとWrite API Keyを設定します。このファイルもGitの管理対象外です。チャネルIDを `0`、またはキーを空のままにするとThingSpeak送信を無効化できます。AmbientとThingSpeakの両方に認証情報を設定すると二重送信します。
+
+```sh
+cp include/thingspeak_secrets.example.h include/thingspeak_secrets.h
+```
+
+```cpp
+constexpr unsigned long THINGSPEAK_CHANNEL_ID = 1234567;
+constexpr char THINGSPEAK_WRITE_API_KEY[] = "your-write-api-key";
+```
+
+ThingSpeakは `https://api.thingspeak.com/update.json` へJSON形式で送信します。Write API Keyに対応するチャネルへ保存し、レスポンスのチャネルIDが設定値と一致することを確認します。`created_at` にはOpenWeather APIから正常に現在天気を取得した時刻をUTCで指定します。送信項目は次のとおりです。
+
+| Field | フィールド名（日本語 / English） | 値 |
+| --- | --- | --- |
+| `field1` | 温度 / Temperature | 気温（℃） |
+| `field2` | 湿度 / Humidity | 湿度（%） |
+| `field3` | 気圧 / Atmospheric Pressure | 気圧（hPa） |
+| `field4` | 天気コード / Weather Code | OpenWeather weather condition ID |
+| `field5` | 降水確率 / Probability of Precipitation | 直近3時間予報の降水確率（%） |
+| `field6` | 高温アラート / High Temperature Alert | なし `0`、発報中 `30` / `35` / `40` |
+| `field7` | Wi-Fi受信信号強度 / Wi-Fi RSSI | RSSI（dBm） |
+| `field8` | 降雨アラート / Rain Alert | なし `0`、発報中 `1` |
+
+ThingSpeakの無料ライセンスはチャネル更新間隔が15秒以上に制限されています。本プロジェクトは10分ごとの自動更新と、最短30秒間隔の手動更新なので制限内です。ThingSpeak送信に失敗しても天気表示、読み上げ、アラート、Ambient送信は継続します。初回実装ではThingSpeak用の再送キューは作成しません。
 
 起動時にWi-Fiへ接続した後、NTPサーバーから時刻を取得します。時刻は日本標準時（JST）で液晶とシリアルモニターに表示されます。液晶のデフォルト表示形式は `yyyy.mm.dd. ddd hh:mm` で、設定モードから秒表示へ切り替えられます。
 

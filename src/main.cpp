@@ -18,6 +18,7 @@
 #include "SpeechService.h"
 #include "SpeechNumberFormatter.h"
 #include "TemperatureAlertService.h"
+#include "ThingSpeakPublisher.h"
 
 namespace {
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
@@ -130,6 +131,9 @@ RainForecastAlertService rainForecastAlerts;
 bool higherPriorityAlertTriggeredThisUpdate = false;
 AmbientPublisher ambientPublisher;
 AmbientPublishResult ambientPublishResult = AmbientPublishResult::NotAttempted;
+ThingSpeakPublisher thingSpeakPublisher;
+ThingSpeakPublishResult thingSpeakPublishResult =
+    ThingSpeakPublishResult::NotAttempted;
 
 CloudinessCategory classifyCloudiness(int cloudiness) {
   if (cloudiness < 0 || cloudiness > 100) {
@@ -480,9 +484,42 @@ void drawWeather() {
     case AmbientPublishResult::NotAttempted:
       break;
   }
-  M5.Lcd.setTextColor(ambientStatusColor, TFT_BLACK);
+  const char* thingSpeakStatus = "not attempted";
+  uint16_t thingSpeakStatusColor = TFT_LIGHTGREY;
+  switch (thingSpeakPublishResult) {
+    case ThingSpeakPublishResult::Sent:
+      thingSpeakStatus = "sent";
+      thingSpeakStatusColor = TFT_GREEN;
+      break;
+    case ThingSpeakPublishResult::CredentialsMissing:
+      thingSpeakStatus = "not configured";
+      thingSpeakStatusColor = TFT_ORANGE;
+      break;
+    case ThingSpeakPublishResult::WiFiDisconnected:
+      thingSpeakStatus = "offline";
+      thingSpeakStatusColor = TFT_ORANGE;
+      break;
+    case ThingSpeakPublishResult::TimeUnavailable:
+      thingSpeakStatus = "time unavailable";
+      thingSpeakStatusColor = TFT_ORANGE;
+      break;
+    case ThingSpeakPublishResult::RequestFailed:
+      thingSpeakStatus = "failed";
+      thingSpeakStatusColor = TFT_RED;
+      break;
+    case ThingSpeakPublishResult::NotAttempted:
+      break;
+  }
+  M5.Lcd.setTextColor(
+      ambientStatusColor == TFT_RED || thingSpeakStatusColor == TFT_RED
+          ? TFT_RED
+          : (ambientStatusColor == TFT_GREEN ||
+                     thingSpeakStatusColor == TFT_GREEN
+                 ? TFT_GREEN
+                 : TFT_ORANGE),
+      TFT_BLACK);
   M5.Lcd.setCursor(16, 218);
-  M5.Lcd.printf("Ambient: %s", ambientStatus);
+  M5.Lcd.printf("A:%s T:%s", ambientStatus, thingSpeakStatus);
 
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Lcd.setCursor(16, 230);
@@ -1046,6 +1083,15 @@ bool updateWeather(WeatherRequestSource source) {
   higherPriorityAlertTriggeredThisUpdate = false;
   const bool currentUpdated = fetchCurrentWeather();
   const bool forecastUpdated = fetchForecast();
+  if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
+      forecast.count > 0) {
+    thingSpeakPublishResult = thingSpeakPublisher.publish(
+        weather.observedAt, weather.temperature, weather.humidity,
+        weather.pressure, weather.conditionId,
+        forecast.entries[0].precipitationProbability,
+        temperatureAlerts.activeThreshold(weather.temperature), WiFi.RSSI(),
+        rainAlerts.isRainActive());
+  }
   drawMainScreen();
   return currentUpdated || forecastUpdated;
 }

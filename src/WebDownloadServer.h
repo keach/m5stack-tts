@@ -13,10 +13,13 @@ class WebDownloadServer {
   void begin(bool storageAvailable);
   void handleClient();
  private:
+  void registerRoutes();
+  void startIfReady();
   void sendIndex();
   void sendDownload(const DownloadFile& download);
   void sendText(int status, const char* message);
   WebServer server_{80};
   bool storageAvailable_ = false;
+  bool routesRegistered_ = false;
   bool started_ = false;
 };

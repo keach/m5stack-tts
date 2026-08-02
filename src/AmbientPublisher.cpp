@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 
 #include "ambient_secrets.h"
+#include "SdCardLock.h"
 
 namespace {
 constexpr char AMBIENT_API_HOST[] = "https://ambidata.io";
@@ -76,6 +77,12 @@ AmbientPublishResult postPayload(JsonDocument& payload, const char* endpoint) {
 }
 
 bool recoverQueueFiles() {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; Ambient queue operation was skipped.");
+    return false;
+  }
+
   if (!SD.exists(QUEUE_PATH) && SD.exists(QUEUE_BACKUP_PATH)) {
     if (!SD.rename(QUEUE_BACKUP_PATH, QUEUE_PATH)) {
       Serial.println("Failed to recover the Ambient retry queue.");
@@ -91,6 +98,12 @@ bool recoverQueueFiles() {
 }
 
 bool queueHasRecords() {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; Ambient queue operation was skipped.");
+    return false;
+  }
+
   if (!SD.exists(QUEUE_PATH)) {
     return false;
   }
@@ -104,6 +117,12 @@ bool queueHasRecords() {
 }
 
 bool appendToQueue(JsonDocument& record) {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; Ambient queue operation was skipped.");
+    return false;
+  }
+
   File file = SD.open(QUEUE_PATH, FILE_APPEND);
   if (!file) {
     Serial.println("Failed to open the Ambient retry queue.");
@@ -121,6 +140,12 @@ bool appendToQueue(JsonDocument& record) {
 }
 
 bool discardQueuedLines(size_t lineCount) {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; Ambient queue operation was skipped.");
+    return false;
+  }
+
   File source = SD.open(QUEUE_PATH, FILE_READ);
   if (!source) {
     return false;
@@ -175,34 +200,41 @@ bool discardQueuedLines(size_t lineCount) {
 }
 
 AmbientPublishResult sendQueuedBatch() {
-  File queue = SD.open(QUEUE_PATH, FILE_READ);
-  if (!queue) {
-    return AmbientPublishResult::RequestFailed;
-  }
-
   JsonDocument payload;
   payload["writeKey"] = AMBIENT_WRITE_KEY;
   JsonArray data = payload["data"].to<JsonArray>();
   size_t consumedLines = 0;
   size_t validRecords = 0;
-  while (queue.available() && consumedLines < MAX_BATCH_RECORDS) {
-    String line = queue.readStringUntil('\n');
-    ++consumedLines;
-    line.trim();
-    if (line.isEmpty()) {
-      continue;
+  {
+    SdCardGuard sdGuard;
+    if (!sdGuard.locked()) {
+      Serial.println("SD card is busy; Ambient queue operation was skipped.");
+      return AmbientPublishResult::RequestFailed;
     }
-    JsonDocument record;
-    const DeserializationError error = deserializeJson(record, line);
-    if (error) {
-      Serial.printf("Skipping malformed Ambient queue record: %s\n",
-                    error.c_str());
-      continue;
+
+    File queue = SD.open(QUEUE_PATH, FILE_READ);
+    if (!queue) {
+      return AmbientPublishResult::RequestFailed;
     }
-    data.add(record.as<JsonObjectConst>());
-    ++validRecords;
+    while (queue.available() && consumedLines < MAX_BATCH_RECORDS) {
+      String line = queue.readStringUntil('\n');
+      ++consumedLines;
+      line.trim();
+      if (line.isEmpty()) {
+        continue;
+      }
+      JsonDocument record;
+      const DeserializationError error = deserializeJson(record, line);
+      if (error) {
+        Serial.printf("Skipping malformed Ambient queue record: %s\n",
+                      error.c_str());
+        continue;
+      }
+      data.add(record.as<JsonObjectConst>());
+      ++validRecords;
+    }
+    queue.close();
   }
-  queue.close();
 
   if (validRecords == 0) {
     discardQueuedLines(consumedLines);

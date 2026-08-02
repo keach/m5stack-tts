@@ -1,6 +1,7 @@
 #pragma once
 
 #include <M5Stack.h>
+#include <WiFi.h>
 
 #include "AppSettings.h"
 #include "SpeechService.h"
@@ -12,6 +13,7 @@ struct DiagnosticStatus {
   bool wifiConnected;
   bool timeSynchronized;
   bool weatherAvailable;
+  IPAddress ipAddress;
 };
 
 class SettingsMode {

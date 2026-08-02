@@ -14,11 +14,25 @@ class RainForecastAlertService {
   bool isActive() const;
   uint8_t probabilityPercent() const;
   float rainThreeHours() const;
+  void processPendingLog();
 
  private:
   bool appendLog(time_t forecastAt, uint8_t probabilityPercent,
                  float rainThreeHours, bool audioPlayed, time_t alertTime);
   void saveState();
+  void scheduleLogRetry(time_t forecastAt, uint8_t probabilityPercent,
+                        float rainThreeHours, bool audioPlayed,
+                        time_t alertTime);
+  struct PendingLog {
+    time_t forecastAt = 0;
+    uint8_t probabilityPercent = 0;
+    float rainThreeHours = 0;
+    bool audioPlayed = false;
+    time_t alertTime = 0;
+    unsigned long nextRetryAt = 0;
+    uint8_t retryCount = 0;
+    bool active = false;
+  };
 
   static constexpr uint8_t CLEAR_OBSERVATIONS_TO_REARM = 2;
   Preferences preferences_;
@@ -27,4 +41,5 @@ class RainForecastAlertService {
   time_t forecastAt_ = 0;
   uint8_t probabilityPercent_ = 0;
   float rainThreeHours_ = 0;
+  PendingLog pendingLog_;
 };

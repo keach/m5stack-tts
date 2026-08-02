@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <time.h>
 
+#include "SdCardLock.h"
+
 #include "SpeechNumberFormatter.h"
 
 namespace {
@@ -11,6 +13,8 @@ constexpr char ACTIVE_KEY[] = "active";
 constexpr char DRY_COUNT_KEY[] = "dry_count";
 constexpr char LOG_PATH[] = "/rain_alerts.csv";
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
+constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
+constexpr uint8_t LOG_RETRY_LIMIT = 3;
 }  // namespace
 
 void RainAlertService::begin() {
@@ -27,6 +31,12 @@ void RainAlertService::saveState() {
 
 bool RainAlertService::appendLog(const char* condition, float rainLastHour,
                                  bool audioPlayed, time_t alertTime) {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; alert log was skipped.");
+    return false;
+  }
+
   const bool needsHeader = !SD.exists(LOG_PATH);
   File file = SD.open(LOG_PATH, FILE_APPEND);
   if (!file) {
@@ -86,7 +96,9 @@ bool RainAlertService::evaluate(bool rainingNow, const char* condition,
   const time_t now = time(nullptr);
   const bool shouldPlayAudio =
       audioAllowed && now >= MINIMUM_VALID_TIME;
-  appendLog(condition, rainLastHour, shouldPlayAudio, now);
+  if (!appendLog(condition, rainLastHour, shouldPlayAudio, now)) {
+    scheduleLogRetry(condition, rainLastHour, shouldPlayAudio, now);
+  }
   Serial.printf("Rain alert: %s, %.1f mm in the last hour, audio=%s\n",
                 condition, rainLastHour, shouldPlayAudio ? "yes" : "no");
 
@@ -106,4 +118,37 @@ bool RainAlertService::evaluate(bool rainingNow, const char* condition,
   return true;
 }
 
+void RainAlertService::scheduleLogRetry(const char* condition,
+                                             float rainLastHour,
+                                             bool audioPlayed,
+                                             time_t alertTime) {
+  if (pendingLog_.active) {
+    Serial.println("Rain alert log retry is already pending.");
+    return;
+  }
+  strncpy(pendingLog_.condition, condition, sizeof(pendingLog_.condition) - 1);
+  pendingLog_.condition[sizeof(pendingLog_.condition) - 1] = '\0';
+  pendingLog_.rainLastHour = rainLastHour;
+  pendingLog_.audioPlayed = audioPlayed;
+  pendingLog_.alertTime = alertTime;
+  pendingLog_.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
+  pendingLog_.retryCount = 0;
+  pendingLog_.active = true;
+}
+void RainAlertService::processPendingLog() {
+  if (!pendingLog_.active ||
+      static_cast<long>(millis() - pendingLog_.nextRetryAt) < 0) return;
+  if (appendLog(pendingLog_.condition, pendingLog_.rainLastHour,
+                pendingLog_.audioPlayed, pendingLog_.alertTime)) {
+    pendingLog_.active = false;
+    return;
+  }
+  ++pendingLog_.retryCount;
+  if (pendingLog_.retryCount >= LOG_RETRY_LIMIT) {
+    pendingLog_.active = false;
+    Serial.println("Rain alert log retry limit reached.");
+    return;
+  }
+  pendingLog_.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
+}
 bool RainAlertService::isRainActive() const { return rainActive_; }

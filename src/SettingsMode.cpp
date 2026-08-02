@@ -149,6 +149,11 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics) {
     M5.Lcd.print(values[index] ? "OK" : "NG");
   }
 
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(24, 207);
+  M5.Lcd.printf("IP: %s", diagnostics.ipAddress.toString().c_str());
+
   M5.Lcd.fillRect(0, 218, 320, 22, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
   M5.Lcd.setTextSize(1);

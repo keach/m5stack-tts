@@ -3,9 +3,13 @@
 #include <SD.h>
 #include <time.h>
 
+#include "SdCardLock.h"
+
 namespace {
 constexpr char LOG_PATH[] = "/temperature_alerts.csv";
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
+constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
+constexpr uint8_t LOG_RETRY_LIMIT = 3;
 }  // namespace
 
 void TemperatureAlertService::begin() {
@@ -32,6 +36,12 @@ int TemperatureAlertService::activeThreshold(float temperature) const {
 
 bool TemperatureAlertService::appendLog(float temperature, int threshold,
                                         bool audioPlayed, time_t alertTime) {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; alert log was skipped.");
+    return false;
+  }
+
   const bool needsHeader = !SD.exists(LOG_PATH);
   File file = SD.open(LOG_PATH, FILE_APPEND);
   if (!file) {
@@ -101,7 +111,9 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
   for (int index = 0; index < ALERT_COUNT; ++index) {
     if (!triggered[index]) continue;
     const bool audioPlayed = shouldPlayAudio && index == highestTriggeredIndex;
-    appendLog(temperature, alerts_[index].threshold, audioPlayed, now);
+    if (!appendLog(temperature, alerts_[index].threshold, audioPlayed, now)) {
+      scheduleLogRetry(temperature, alerts_[index].threshold, audioPlayed, now);
+    }
     Serial.printf("Temperature alert: %.1f C >= %d C, audio=%s\n",
                   temperature, alerts_[index].threshold,
                   audioPlayed ? "yes" : "no");
@@ -131,4 +143,40 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
   speech.playAlertTone(beepDurationMs, beepCount);
   speech.speak(message);
   return true;
+}
+
+void TemperatureAlertService::scheduleLogRetry(float temperature, int threshold,
+                                               bool audioPlayed,
+                                               time_t alertTime) {
+  for (PendingLog& pending : pendingLogs_) {
+    if (pending.active) continue;
+    pending.temperature = temperature;
+    pending.threshold = threshold;
+    pending.audioPlayed = audioPlayed;
+    pending.alertTime = alertTime;
+    pending.nextRetryAt = millis() + LOG_RETRY_INTERVAL_MS;
+    pending.retryCount = 0;
+    pending.active = true;
+    return;
+  }
+  Serial.println("Temperature alert log retry queue is full.");
+}
+void TemperatureAlertService::processPendingLogs() {
+  const unsigned long now = millis();
+  for (PendingLog& pending : pendingLogs_) {
+    if (!pending.active || static_cast<long>(now - pending.nextRetryAt) < 0)
+      continue;
+    if (appendLog(pending.temperature, pending.threshold, pending.audioPlayed,
+                  pending.alertTime)) {
+      pending.active = false;
+      continue;
+    }
+    ++pending.retryCount;
+    if (pending.retryCount >= LOG_RETRY_LIMIT) {
+      pending.active = false;
+      Serial.println("Temperature alert log retry limit reached.");
+    } else {
+      pending.nextRetryAt = now + LOG_RETRY_INTERVAL_MS;
+    }
+  }
 }

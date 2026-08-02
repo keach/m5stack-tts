@@ -14,11 +14,13 @@
 #include "AppSettings.h"
 #include "RainAlertService.h"
 #include "RainForecastAlertService.h"
+#include "SdCardLock.h"
 #include "SettingsMode.h"
 #include "SpeechService.h"
 #include "SpeechNumberFormatter.h"
 #include "TemperatureAlertService.h"
 #include "ThingSpeakPublisher.h"
+#include "WebDownloadServer.h"
 
 namespace {
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
@@ -134,6 +136,7 @@ AmbientPublishResult ambientPublishResult = AmbientPublishResult::NotAttempted;
 ThingSpeakPublisher thingSpeakPublisher;
 ThingSpeakPublishResult thingSpeakPublishResult =
     ThingSpeakPublishResult::NotAttempted;
+WebDownloadServer webDownloadServer;
 
 CloudinessCategory classifyCloudiness(int cloudiness) {
   if (cloudiness < 0 || cloudiness > 100) {
@@ -245,6 +248,12 @@ bool initializeStorage() {
 
 bool appendWeatherLog(const WeatherData& data, time_t observedAt) {
   if (!storageAvailable) {
+    return false;
+  }
+
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; weather log was skipped.");
     return false;
   }
 
@@ -1116,6 +1125,7 @@ void setup() {
   rainAlerts.begin();
   rainForecastAlerts.begin();
   connectToWiFi();
+  webDownloadServer.begin(storageAvailable);
   syncTimeWithNtp();
   drawDateTime();
   drawMainScreen();
@@ -1130,6 +1140,7 @@ void setup() {
         WiFi.status() == WL_CONNECTED,
         getLocalTime(&diagnosticTime, 10),
         weather.valid,
+        WiFi.localIP(),
     };
     settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
     clockDisplayPrecision = appSettings.clockPrecision();
@@ -1142,6 +1153,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  webDownloadServer.handleClient();
 
   if (displaySleeping &&
       (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed())) {

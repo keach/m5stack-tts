@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <time.h>
 
+#include "SdCardLock.h"
+
 namespace {
 constexpr char LOG_PATH[] = "/temperature_alerts.csv";
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
@@ -32,6 +34,12 @@ int TemperatureAlertService::activeThreshold(float temperature) const {
 
 bool TemperatureAlertService::appendLog(float temperature, int threshold,
                                         bool audioPlayed, time_t alertTime) {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; alert log was skipped.");
+    return false;
+  }
+
   const bool needsHeader = !SD.exists(LOG_PATH);
   File file = SD.open(LOG_PATH, FILE_APPEND);
   if (!file) {

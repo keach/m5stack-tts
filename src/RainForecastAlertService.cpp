@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <time.h>
 
+#include "SdCardLock.h"
+
 #include "SpeechNumberFormatter.h"
 
 namespace {
@@ -42,6 +44,12 @@ bool RainForecastAlertService::appendLog(time_t forecastAt,
                                          float rainThreeHours,
                                          bool audioPlayed,
                                          time_t alertTime) {
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    Serial.println("SD card is busy; alert log was skipped.");
+    return false;
+  }
+
   const bool needsHeader = !SD.exists(LOG_PATH);
   File file = SD.open(LOG_PATH, FILE_APPEND);
   if (!file) {

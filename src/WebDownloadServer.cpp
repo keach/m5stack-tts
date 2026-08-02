@@ -17,22 +17,29 @@ constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);
 
 void WebDownloadServer::begin(bool storageAvailable) {
   storageAvailable_ = storageAvailable;
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Web download server not started because Wi-Fi is disconnected.");
-    return;
-  }
+  registerRoutes();
+  startIfReady();
+}
+void WebDownloadServer::registerRoutes() {
+  if (routesRegistered_) return;
   server_.on("/", HTTP_GET, [this]() { sendIndex(); });
   for (size_t index = 0; index < DOWNLOAD_COUNT; ++index) {
     server_.on(DOWNLOADS[index].route, HTTP_GET,
                [this, index]() { sendDownload(DOWNLOADS[index]); });
   }
   server_.onNotFound([this]() { sendText(404, "Not Found"); });
+  routesRegistered_ = true;
+}
+void WebDownloadServer::startIfReady() {
+  if (started_ || WiFi.status() != WL_CONNECTED) return;
+  registerRoutes();
   server_.begin();
   started_ = true;
   Serial.printf("Web download server started at http://%s/\n",
                 WiFi.localIP().toString().c_str());
 }
 void WebDownloadServer::handleClient() {
+  startIfReady();
   if (started_ && WiFi.status() == WL_CONNECTED) server_.handleClient();
 }
 void WebDownloadServer::sendText(int status, const char* message) {

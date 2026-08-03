@@ -63,7 +63,10 @@ bool RainAlertService::appendLog(const char* condition, float rainLastHour,
 
 bool RainAlertService::evaluate(bool rainingNow, const char* condition,
                                 float rainLastHour, bool audioAllowed,
-                                SpeechService& speech) {
+                                bool* audioRequested) {
+  if (audioRequested != nullptr) {
+    *audioRequested = false;
+  }
   if (!rainingNow) {
     if (!rainActive_) {
       return false;
@@ -102,10 +105,13 @@ bool RainAlertService::evaluate(bool rainingNow, const char* condition,
   Serial.printf("Rain alert: %s, %.1f mm in the last hour, audio=%s\n",
                 condition, rainLastHour, shouldPlayAudio ? "yes" : "no");
 
-  if (!shouldPlayAudio) {
-    return true;
+  if (audioRequested != nullptr) {
+    *audioRequested = shouldPlayAudio;
   }
+  return true;
+}
 
+void RainAlertService::notify(float rainLastHour, SpeechService& speech) {
   char rainText[24];
   SpeechNumberFormatter::formatOneDecimal(rainLastHour, rainText,
                                           sizeof(rainText));
@@ -115,7 +121,6 @@ bool RainAlertService::evaluate(bool rainingNow, const char* condition,
            rainText);
   speech.playAlertTone();
   speech.speak(message);
-  return true;
 }
 
 void RainAlertService::scheduleLogRetry(const char* condition,

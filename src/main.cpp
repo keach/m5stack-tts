@@ -948,18 +948,25 @@ bool fetchCurrentWeather() {
   const bool timeAvailable = getLocalTime(&localTime, 10);
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
   bool temperatureAlertTriggered = false;
-  const bool temperatureAudioPlayed = temperatureAlerts.evaluate(
-      weather.temperature, speechAvailable && !quietHours, speech,
+  const bool temperatureAudioRequested = temperatureAlerts.evaluate(
+      weather.temperature, speechAvailable && !quietHours,
       &temperatureAlertTriggered);
+  bool rainAudioRequested = false;
   const bool rainAlertTriggered = rainAlerts.evaluate(
       isRainingCondition(weather.condition), weather.condition,
       weather.rainLastHour,
-      speechAvailable && !quietHours && !temperatureAudioPlayed, speech);
+      speechAvailable && !quietHours && !temperatureAudioRequested,
+      &rainAudioRequested);
   higherPriorityAlertTriggeredThisUpdate =
       temperatureAlertTriggered || rainAlertTriggered;
-  if (temperatureAlertTriggered || rainAlertTriggered) {
+  if (higherPriorityAlertTriggeredThisUpdate) {
     mainScreen = MainScreen::CurrentWeather;
     wakeDisplay();
+  }
+  if (temperatureAudioRequested) {
+    temperatureAlerts.notify(weather.temperature, speech);
+  } else if (rainAudioRequested) {
+    rainAlerts.notify(weather.rainLastHour, speech);
   }
 
   Serial.printf(
@@ -1093,16 +1100,21 @@ bool fetchForecast() {
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
   const bool rainingNow =
       weather.valid && isRainingCondition(weather.condition);
+  bool rainForecastAudioRequested = false;
   const bool rainForecastTriggered = rainForecastAlerts.evaluate(
       forecastMatches, rainingNow, nearest.forecastAt,
       nearest.precipitationProbability, nearest.rainThreeHours,
       speechAvailable && !quietHours &&
           !higherPriorityAlertTriggeredThisUpdate && !speech.isSpeaking(),
-      speech);
-  if (rainForecastTriggered) {
+      &rainForecastAudioRequested);
+  if (rainForecastTriggered && !higherPriorityAlertTriggeredThisUpdate) {
     mainScreen = MainScreen::Forecast;
     lastForecastInteraction = millis();
     wakeDisplay();
+  }
+  if (rainForecastAudioRequested) {
+    rainForecastAlerts.notify(nearest.precipitationProbability,
+                              nearest.rainThreeHours, speech);
   }
   return true;
 }

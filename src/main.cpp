@@ -136,6 +136,7 @@ RainForecastAlertService rainForecastAlerts;
 struct UpdateNotificationPlan {
   bool higherPriorityTriggered = false;
   bool temperatureAudioRequested = false;
+  int temperatureThreshold = 0;
   bool rainAudioRequested = false;
   bool rainForecastTriggered = false;
   bool rainForecastAudioRequested = false;
@@ -143,6 +144,7 @@ struct UpdateNotificationPlan {
   void reset() {
     higherPriorityTriggered = false;
     temperatureAudioRequested = false;
+    temperatureThreshold = 0;
     rainAudioRequested = false;
     rainForecastTriggered = false;
     rainForecastAudioRequested = false;
@@ -297,7 +299,6 @@ bool writeWeatherLog(const WeatherData& data, time_t observedAt) {
     file.println(
         "datetime,weather,temp_c,humidity_pct,pressure_hpa,rain_1h_mm");
   }
-
   char formattedTime[20] = "unknown";
   if (observedAt >= MINIMUM_VALID_TIME) {
     tm timeInfo = {};
@@ -598,7 +599,6 @@ void drawWeather() {
   M5.Lcd.setCursor(16, 230);
   M5.Lcd.print("A:refresh B:speak/stop C:forecast");
 }
-
 void drawForecast() {
   if (displaySleeping) {
     return;
@@ -897,8 +897,7 @@ void toggleScreenSpeech() {
     speakForecast();
   } else {
     speakCurrentWeather();
-  }
-}
+  }}
 
 const char* weatherRequestSourceName(WeatherRequestSource source) {
   switch (source) {
@@ -967,7 +966,7 @@ bool fetchCurrentWeather() {
   bool temperatureAlertTriggered = false;
   notificationPlan.temperatureAudioRequested = temperatureAlerts.evaluate(
       weather.temperature, speechAvailable && !quietHours,
-      &temperatureAlertTriggered);
+      &temperatureAlertTriggered, &notificationPlan.temperatureThreshold);
   bool rainAlertTriggered = rainAlerts.evaluate(
       isRainingCondition(weather.condition), weather.condition,
       weather.rainLastHour,
@@ -1130,7 +1129,8 @@ void applyNotificationPlan() {
   wakeDisplay();
 
   if (notificationPlan.temperatureAudioRequested) {
-    temperatureAlerts.notify(weather.temperature, speech);
+    temperatureAlerts.notify(weather.temperature,
+                             notificationPlan.temperatureThreshold, speech);
   } else if (notificationPlan.rainAudioRequested) {
     rainAlerts.notify(weather.rainLastHour, speech);
   } else if (notificationPlan.rainForecastAudioRequested &&
@@ -1197,8 +1197,7 @@ void setup() {
 
   appSettings.begin();
   clockDisplayPrecision = appSettings.clockPrecision();
-  speech.setVolumePercent(appSettings.volumePercent());
-  const bool settingsRequested = showSplashScreen();
+  speech.setVolumePercent(appSettings.volumePercent());  const bool settingsRequested = showSplashScreen();
 
   storageAvailable = initializeStorage();
   speechAvailable = storageAvailable && speech.begin();

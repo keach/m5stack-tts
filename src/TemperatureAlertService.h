@@ -9,8 +9,9 @@ class TemperatureAlertService {
  public:
   void begin();
   bool evaluate(float temperature, bool audioAllowed,
-                bool* alertTriggered = nullptr);
-  void notify(float temperature, SpeechService& speech);
+                bool* alertTriggered = nullptr,
+                int* triggeredThreshold = nullptr);
+  void notify(float temperature, int threshold, SpeechService& speech);
   int activeThreshold(float temperature) const;
   void processPendingLogs();
 

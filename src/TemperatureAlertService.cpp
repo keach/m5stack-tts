@@ -67,10 +67,13 @@ bool TemperatureAlertService::appendLog(float temperature, int threshold,
 }
 
 bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
-                                       SpeechService& speech,
-                                       bool* alertTriggered) {
+                                       bool* alertTriggered,
+                                       int* triggeredThreshold) {
   if (alertTriggered != nullptr) {
     *alertTriggered = false;
+  }
+  if (triggeredThreshold != nullptr) {
+    *triggeredThreshold = 0;
   }
   const time_t now = time(nullptr);
   const bool timeIsValid = now >= MINIMUM_VALID_TIME;
@@ -106,6 +109,9 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
   if (alertTriggered != nullptr) {
     *alertTriggered = true;
   }
+  if (triggeredThreshold != nullptr) {
+    *triggeredThreshold = alerts_[highestTriggeredIndex].threshold;
+  }
 
   const bool shouldPlayAudio = audioAllowed && timeIsValid;
   for (int index = 0; index < ALERT_COUNT; ++index) {
@@ -119,11 +125,11 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
                   audioPlayed ? "yes" : "no");
   }
 
-  if (!shouldPlayAudio) {
-    return false;
-  }
+  return shouldPlayAudio;
+}
 
-  const int threshold = alerts_[highestTriggeredIndex].threshold;
+void TemperatureAlertService::notify(float temperature, int threshold,
+                                     SpeechService& speech) {
   char message[200];
   int beepDurationMs = 90;
   int beepCount = 2;
@@ -142,7 +148,6 @@ bool TemperatureAlertService::evaluate(float temperature, bool audioAllowed,
   snprintf(message, sizeof(message), messageFormat, temperature);
   speech.playAlertTone(beepDurationMs, beepCount);
   speech.speak(message);
-  return true;
 }
 
 void TemperatureAlertService::scheduleLogRetry(float temperature, int threshold,

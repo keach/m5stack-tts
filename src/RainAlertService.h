@@ -9,7 +9,8 @@ class RainAlertService {
  public:
   void begin();
   bool evaluate(bool rainingNow, const char* condition, float rainLastHour,
-                bool audioAllowed, SpeechService& speech);
+                bool audioAllowed, bool* audioRequested = nullptr);
+  void notify(float rainLastHour, SpeechService& speech);
   bool isRainActive() const;
   void processPendingLog();
 

@@ -132,7 +132,26 @@ bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
-bool higherPriorityAlertTriggeredThisUpdate = false;
+
+struct UpdateNotificationPlan {
+  bool higherPriorityTriggered = false;
+  bool temperatureAudioRequested = false;
+  int temperatureThreshold = 0;
+  bool rainAudioRequested = false;
+  bool rainForecastTriggered = false;
+  bool rainForecastAudioRequested = false;
+
+  void reset() {
+    higherPriorityTriggered = false;
+    temperatureAudioRequested = false;
+    temperatureThreshold = 0;
+    rainAudioRequested = false;
+    rainForecastTriggered = false;
+    rainForecastAudioRequested = false;
+  }
+};
+UpdateNotificationPlan notificationPlan;
+
 AmbientPublisher ambientPublisher;
 AmbientPublishResult ambientPublishResult = AmbientPublishResult::NotAttempted;
 ThingSpeakPublisher thingSpeakPublisher;
@@ -948,19 +967,17 @@ bool fetchCurrentWeather() {
   const bool timeAvailable = getLocalTime(&localTime, 10);
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
   bool temperatureAlertTriggered = false;
-  const bool temperatureAudioPlayed = temperatureAlerts.evaluate(
-      weather.temperature, speechAvailable && !quietHours, speech,
-      &temperatureAlertTriggered);
-  const bool rainAlertTriggered = rainAlerts.evaluate(
+  notificationPlan.temperatureAudioRequested = temperatureAlerts.evaluate(
+      weather.temperature, speechAvailable && !quietHours,
+      &temperatureAlertTriggered, &notificationPlan.temperatureThreshold);
+  bool rainAlertTriggered = rainAlerts.evaluate(
       isRainingCondition(weather.condition), weather.condition,
       weather.rainLastHour,
-      speechAvailable && !quietHours && !temperatureAudioPlayed, speech);
-  higherPriorityAlertTriggeredThisUpdate =
+      speechAvailable && !quietHours &&
+          !notificationPlan.temperatureAudioRequested,
+      &notificationPlan.rainAudioRequested);
+  notificationPlan.higherPriorityTriggered =
       temperatureAlertTriggered || rainAlertTriggered;
-  if (temperatureAlertTriggered || rainAlertTriggered) {
-    mainScreen = MainScreen::CurrentWeather;
-    wakeDisplay();
-  }
 
   Serial.printf(
       "Weather updated: %s (%d), cloudiness %d %%, %.1f C, %d %%, %d hPa, "
@@ -1093,18 +1110,37 @@ bool fetchForecast() {
   const bool quietHours = !timeAvailable || localTime.tm_hour < 6;
   const bool rainingNow =
       weather.valid && isRainingCondition(weather.condition);
-  const bool rainForecastTriggered = rainForecastAlerts.evaluate(
+  notificationPlan.rainForecastTriggered = rainForecastAlerts.evaluate(
       forecastMatches, rainingNow, nearest.forecastAt,
       nearest.precipitationProbability, nearest.rainThreeHours,
       speechAvailable && !quietHours &&
-          !higherPriorityAlertTriggeredThisUpdate && !speech.isSpeaking(),
-      speech);
-  if (rainForecastTriggered) {
+          !notificationPlan.higherPriorityTriggered && !speech.isSpeaking(),
+      &notificationPlan.rainForecastAudioRequested);
+  return true;
+}
+
+void applyNotificationPlan() {
+  if (notificationPlan.higherPriorityTriggered) {
+    mainScreen = MainScreen::CurrentWeather;
+  } else if (notificationPlan.rainForecastTriggered) {
     mainScreen = MainScreen::Forecast;
     lastForecastInteraction = millis();
-    wakeDisplay();
+  } else {
+    return;
   }
-  return true;
+
+  wakeDisplay();
+
+  if (notificationPlan.temperatureAudioRequested) {
+    temperatureAlerts.notify(weather.temperature,
+                             notificationPlan.temperatureThreshold, speech);
+  } else if (notificationPlan.rainAudioRequested) {
+    rainAlerts.notify(weather.rainLastHour, speech);
+  } else if (notificationPlan.rainForecastAudioRequested &&
+             forecast.count > 0) {
+    rainForecastAlerts.notify(forecast.entries[0].precipitationProbability,
+                              forecast.entries[0].rainThreeHours, speech);
+  }
 }
 
 bool updateWeather(WeatherRequestSource source) {
@@ -1136,9 +1172,10 @@ bool updateWeather(WeatherRequestSource source) {
     return false;
   }
 
-  higherPriorityAlertTriggeredThisUpdate = false;
+  notificationPlan.reset();
   const bool currentUpdated = fetchCurrentWeather();
   const bool forecastUpdated = fetchForecast();
+  applyNotificationPlan();
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
     thingSpeakPublishResult = thingSpeakPublisher.publish(

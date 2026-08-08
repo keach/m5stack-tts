@@ -10,7 +10,9 @@ class RainForecastAlertService {
   void begin();
   bool evaluate(bool forecastMatches, bool rainingNow, time_t forecastAt,
                 uint8_t probabilityPercent, float rainThreeHours,
-                bool audioAllowed, SpeechService& speech);
+                bool audioAllowed, bool* audioRequested = nullptr);
+  void notify(uint8_t probabilityPercent, float rainThreeHours,
+              SpeechService& speech);
   bool isActive() const;
   uint8_t probabilityPercent() const;
   float rainThreeHours() const;

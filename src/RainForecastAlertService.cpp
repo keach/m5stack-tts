@@ -91,7 +91,10 @@ bool RainForecastAlertService::evaluate(bool forecastMatches, bool rainingNow,
                                         uint8_t probabilityPercent,
                                         float rainThreeHours,
                                         bool audioAllowed,
-                                        SpeechService& speech) {
+                                        bool* audioRequested) {
+  if (audioRequested != nullptr) {
+    *audioRequested = false;
+  }
   if (!forecastMatches) {
     if (!active_) {
       return false;
@@ -154,10 +157,15 @@ bool RainForecastAlertService::evaluate(bool forecastMatches, bool rainingNow,
       probabilityPercent, rainThreeHours,
       shouldPlayAudio ? "yes" : "no");
 
-  if (!shouldPlayAudio) {
-    return true;
+  if (audioRequested != nullptr) {
+    *audioRequested = shouldPlayAudio;
   }
+  return true;
+}
 
+void RainForecastAlertService::notify(uint8_t probabilityPercent,
+                                      float rainThreeHours,
+                                      SpeechService& speech) {
   char rainText[24];
   SpeechNumberFormatter::formatOneDecimal(rainThreeHours, rainText,
                                           sizeof(rainText));
@@ -169,7 +177,6 @@ bool RainForecastAlertService::evaluate(bool forecastMatches, bool rainingNow,
       probabilityPercent, rainText);
   speech.playAlertTone();
   speech.speak(message);
-  return true;
 }
 
 void RainForecastAlertService::scheduleLogRetry(

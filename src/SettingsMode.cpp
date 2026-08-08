@@ -3,6 +3,7 @@
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr int MENU_ITEM_COUNT = 9;
+constexpr int MENU_ITEMS_PER_PAGE = 5;
 
 enum MenuItem {
   MENU_CLOCK,
@@ -46,16 +47,24 @@ void SettingsMode::drawMenu(int selectedItem,
   M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(42, 8);
-  M5.Lcd.print("SETTINGS / DIAG");
+  constexpr int pageCount =
+      (MENU_ITEM_COUNT + MENU_ITEMS_PER_PAGE - 1) / MENU_ITEMS_PER_PAGE;
+  const int currentPage = selectedItem / MENU_ITEMS_PER_PAGE;
+  char title[24];
+  snprintf(title, sizeof(title), "SETTINGS %d/%d", currentPage + 1, pageCount);
+  M5.Lcd.setCursor(max(0, (320 - M5.Lcd.textWidth(title)) / 2), 8);
+  M5.Lcd.print(title);
 
-  for (int item = 0; item < MENU_ITEM_COUNT; ++item) {
-    const int y = 37 + item * 20;
+  const int firstItem = currentPage * MENU_ITEMS_PER_PAGE;
+  const int lastItem = min(firstItem + MENU_ITEMS_PER_PAGE, MENU_ITEM_COUNT);
+  for (int item = firstItem; item < lastItem; ++item) {
+    const int row = item - firstItem;
+    const int y = 43 + row * 34;
     const bool selected = item == selectedItem;
     const uint16_t background = selected ? TFT_DARKCYAN : TFT_BLACK;
-    M5.Lcd.fillRect(5, y - 2, 310, 19, background);
+    M5.Lcd.fillRect(5, y - 3, 310, 27, background);
     M5.Lcd.setTextColor(selected ? TFT_WHITE : TFT_LIGHTGREY, background);
-    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(10, y);
 
     switch (item) {

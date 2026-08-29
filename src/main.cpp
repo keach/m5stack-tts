@@ -119,6 +119,7 @@ bool weatherAttempted = false;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
+bool displayDrawingSuppressed = false;
 unsigned long buttonAPressDetectedAt = 0;
 bool buttonAConfirmationPending = false;
 ClockDisplayPrecision clockDisplayPrecision = ClockDisplayPrecision::Minutes;
@@ -430,7 +431,7 @@ void syncTimeWithNtp() {
 }
 
 void drawDateTime() {
-  if (displaySleeping) {
+  if (displaySleeping || displayDrawingSuppressed) {
     return;
   }
   tm timeInfo = {};
@@ -677,7 +678,7 @@ void drawForecast() {
 }
 
 void drawMainScreen() {
-  if (displaySleeping) {
+  if (displaySleeping || displayDrawingSuppressed) {
     return;
   }
   if (mainScreen == MainScreen::Forecast) {
@@ -1211,9 +1212,14 @@ void setup() {
   connectToWiFi();
   webDownloadServer.begin(storageAvailable);
   syncTimeWithNtp();
-  drawDateTime();
-  drawMainScreen();
+
+  displayDrawingSuppressed = settingsRequested;
+  if (!settingsRequested) {
+    drawDateTime();
+    drawMainScreen();
+  }
   updateWeather(WeatherRequestSource::Startup);
+  displayDrawingSuppressed = false;
 
   if (settingsRequested) {
     tm diagnosticTime = {};

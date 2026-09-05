@@ -1144,7 +1144,8 @@ void applyNotificationPlan() {
   }
 }
 
-bool updateWeather(WeatherRequestSource source) {
+bool updateWeather(WeatherRequestSource source,
+                   bool revealDisplayAfterFetch = false) {
   if (automaticForecastSpeechActive) {
     Serial.println(
         "Weather update deferred during scheduled forecast speech.");
@@ -1176,6 +1177,11 @@ bool updateWeather(WeatherRequestSource source) {
   notificationPlan.reset();
   const bool currentUpdated = fetchCurrentWeather();
   const bool forecastUpdated = fetchForecast();
+  if (revealDisplayAfterFetch) {
+    displayDrawingSuppressed = false;
+    drawDateTime();
+    drawMainScreen();
+  }
   applyNotificationPlan();
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
@@ -1213,12 +1219,8 @@ void setup() {
   webDownloadServer.begin(storageAvailable);
   syncTimeWithNtp();
 
-  displayDrawingSuppressed = settingsRequested;
-  if (!settingsRequested) {
-    drawDateTime();
-    drawMainScreen();
-  }
-  updateWeather(WeatherRequestSource::Startup);
+  displayDrawingSuppressed = true;
+  updateWeather(WeatherRequestSource::Startup, !settingsRequested);
   displayDrawingSuppressed = false;
 
   if (settingsRequested) {
@@ -1236,9 +1238,10 @@ void setup() {
     clockDisplayPrecision = appSettings.clockPrecision();
     speech.setVolumePercent(appSettings.volumePercent());
     noteDisplayActivity();
-    drawDateTime();
-    drawMainScreen();
   }
+
+  drawDateTime();
+  drawMainScreen();
 }
 
 void loop() {

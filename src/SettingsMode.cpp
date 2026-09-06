@@ -7,6 +7,9 @@ constexpr int MENU_ROWS_PER_PAGE = 5;
 enum MenuItem {
   MENU_CLOCK,
   MENU_VOLUME,
+  MENU_DISPLAY_SLEEP,
+  MENU_DISPLAY_SLEEP_TIMEOUT,
+  MENU_DISPLAY_BRIGHTNESS,
   MENU_FORECAST_1_ENABLED,
   MENU_FORECAST_1_HOUR,
   MENU_FORECAST_1_MINUTE,
@@ -24,7 +27,9 @@ enum MenuItem {
 constexpr int MENU_ITEM_COUNT = MENU_SAVE_AND_EXIT + 1;
 
 constexpr MenuItem MENU_ROW_ITEMS[] = {
-    MENU_CLOCK,              MENU_VOLUME,          MENU_FORECAST_1_ENABLED,
+    MENU_CLOCK,              MENU_VOLUME,          MENU_DISPLAY_SLEEP,
+    MENU_DISPLAY_SLEEP_TIMEOUT, MENU_DISPLAY_BRIGHTNESS,
+    MENU_FORECAST_1_ENABLED,
     MENU_FORECAST_2_ENABLED, MENU_FORECAST_3_ENABLED,
     MENU_ALARM_TEST,         MENU_SPEECH_TEST,     MENU_DIAGNOSTICS,
     MENU_SAVE_AND_EXIT,
@@ -95,9 +100,62 @@ bool SettingsMode::confirmedPress(Button& button,
   return true;
 }
 
+void SettingsMode::noteDisplayActivity() { lastDisplayActivity_ = millis(); }
+
+void SettingsMode::resetButtonConfirmations() {
+  buttonA_.pending = false;
+  buttonB_.pending = false;
+  buttonC_.pending = false;
+}
+
+SettingsMode::DisplaySleepUpdate SettingsMode::updateDisplaySleep(
+    bool enabled, uint8_t timeoutMinutes, uint8_t brightnessPercent,
+    bool inhibitSleep) {
+  const bool buttonPressed =
+      M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed();
+  if (displaySleeping_) {
+    if (!wakeConfirmationPending_ && buttonPressed) {
+      wakeConfirmationPending_ = true;
+      wakePressDetectedAt_ = millis();
+    }
+    if (wakeConfirmationPending_) {
+      if (!buttonPressed) {
+        wakeConfirmationPending_ = false;
+      } else if (millis() - wakePressDetectedAt_ >= BUTTON_CONFIRMATION_MS) {
+        wakeConfirmationPending_ = false;
+        displaySleeping_ = false;
+        resetButtonConfirmations();
+        M5.Lcd.wakeup();
+        M5.Lcd.setBrightness(
+            AppSettings::displayBrightnessLevel(brightnessPercent));
+        noteDisplayActivity();
+        Serial.println("Settings display woke up (reason: button).");
+        return DisplaySleepUpdate::Woke;
+      }
+    }
+    return DisplaySleepUpdate::Sleeping;
+  }
+
+  const unsigned long timeoutMs =
+      static_cast<unsigned long>(timeoutMinutes) * 60UL * 1000UL;
+  if (enabled && !inhibitSleep &&
+      millis() - lastDisplayActivity_ >= timeoutMs) {
+    displaySleeping_ = true;
+    wakeConfirmationPending_ = false;
+    M5.Lcd.setBrightness(0);
+    M5.Lcd.sleep();
+    Serial.println("Settings display entered sleep mode.");
+    return DisplaySleepUpdate::Sleeping;
+  }
+  return DisplaySleepUpdate::Awake;
+}
+
 void SettingsMode::drawMenu(int selectedItem,
                             ClockDisplayPrecision clockPrecision,
                             uint8_t volumePercent,
+                            bool displaySleepEnabled,
+                            uint8_t displaySleepMinutes,
+                            uint8_t displayBrightnessPercent,
                             const AppSettings::ForecastSchedule*
                                 forecastSchedules) {
   M5.Lcd.fillScreen(TFT_BLACK);
@@ -141,6 +199,16 @@ void SettingsMode::drawMenu(int selectedItem,
         break;
       case MENU_VOLUME:
         M5.Lcd.printf("Volume: %u%%", volumePercent);
+        break;
+      case MENU_DISPLAY_SLEEP:
+        M5.Lcd.printf("Display sleep: %s",
+                      displaySleepEnabled ? "On" : "Off");
+        break;
+      case MENU_DISPLAY_SLEEP_TIMEOUT:
+        M5.Lcd.printf("Sleep after: %u min", displaySleepMinutes);
+        break;
+      case MENU_DISPLAY_BRIGHTNESS:
+        M5.Lcd.printf("Brightness: %u%%", displayBrightnessPercent);
         break;
       case MENU_FORECAST_1_ENABLED:
       case MENU_FORECAST_2_ENABLED:
@@ -221,7 +289,7 @@ void SettingsMode::showMessage(const char* title, const char* detail) {
   }
 }
 
-void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics) {
+void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics) {
   M5.Lcd.fillScreen(TFT_BLACK);
   M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
@@ -258,12 +326,33 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics) {
   M5.Lcd.setTextSize(1);
   M5.Lcd.setCursor(100, 225);
   M5.Lcd.print("Any button: back");
+}
+
+void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
+                                   bool displaySleepEnabled,
+                                   uint8_t displaySleepMinutes,
+                                   uint8_t displayBrightnessPercent) {
+  noteDisplayActivity();
+  drawDiagnostics(diagnostics);
 
   while (true) {
     M5.update();
+    const DisplaySleepUpdate sleepUpdate = updateDisplaySleep(
+        displaySleepEnabled, displaySleepMinutes, displayBrightnessPercent,
+        false);
+    if (sleepUpdate == DisplaySleepUpdate::Woke) {
+      drawDiagnostics(diagnostics);
+      delay(10);
+      continue;
+    }
+    if (sleepUpdate == DisplaySleepUpdate::Sleeping) {
+      delay(10);
+      continue;
+    }
     if (confirmedPress(M5.BtnA, buttonA_) ||
         confirmedPress(M5.BtnB, buttonB_) ||
         confirmedPress(M5.BtnC, buttonC_)) {
+      noteDisplayActivity();
       return;
     }
     delay(10);
@@ -275,6 +364,10 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
                        const DiagnosticStatus& diagnostics) {
   ClockDisplayPrecision draftClockPrecision = settings.clockPrecision();
   uint8_t draftVolume = settings.volumePercent();
+  bool draftDisplaySleepEnabled = settings.displaySleepEnabled();
+  uint8_t draftDisplaySleepMinutes = settings.displaySleepMinutes();
+  uint8_t draftDisplayBrightnessPercent =
+      settings.displayBrightnessPercent();
   AppSettings::ForecastSchedule
       draftForecastSchedules[AppSettings::FORECAST_SCHEDULE_COUNT];
   for (size_t index = 0; index < AppSettings::FORECAST_SCHEDULE_COUNT;
@@ -282,17 +375,46 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
     draftForecastSchedules[index] = settings.forecastSchedule(index);
   }
   int selectedItem = MENU_CLOCK;
+  displaySleeping_ = false;
+  wakeConfirmationPending_ = false;
+  resetButtonConfirmations();
+  noteDisplayActivity();
   speech.setVolumePercent(draftVolume);
+  M5.Lcd.setBrightness(
+      AppSettings::displayBrightnessLevel(draftDisplayBrightnessPercent));
   drawMenu(selectedItem, draftClockPrecision, draftVolume,
+           draftDisplaySleepEnabled, draftDisplaySleepMinutes,
+           draftDisplayBrightnessPercent,
            draftForecastSchedules);
+  bool speechWasActive = speech.isSpeaking();
 
   while (true) {
     M5.update();
+    const bool speechActive = speech.isSpeaking();
+    if (speechWasActive && !speechActive) {
+      noteDisplayActivity();
+    }
+    speechWasActive = speechActive;
+    const DisplaySleepUpdate sleepUpdate = updateDisplaySleep(
+        draftDisplaySleepEnabled, draftDisplaySleepMinutes,
+        draftDisplayBrightnessPercent, speechActive);
+    if (sleepUpdate == DisplaySleepUpdate::Woke) {
+      drawMenu(selectedItem, draftClockPrecision, draftVolume,
+               draftDisplaySleepEnabled, draftDisplaySleepMinutes,
+               draftDisplayBrightnessPercent, draftForecastSchedules);
+      delay(10);
+      continue;
+    }
+    if (sleepUpdate == DisplaySleepUpdate::Sleeping) {
+      delay(10);
+      continue;
+    }
     const bool previousPressed = confirmedPress(M5.BtnA, buttonA_);
     const bool selectPressed = confirmedPress(M5.BtnB, buttonB_);
     const bool nextPressed = confirmedPress(M5.BtnC, buttonC_);
 
     if (previousPressed || nextPressed) {
+      noteDisplayActivity();
       if (speech.isSpeaking()) {
         speech.stop();
       }
@@ -300,10 +422,13 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
                          ? (selectedItem + MENU_ITEM_COUNT - 1) % MENU_ITEM_COUNT
                          : (selectedItem + 1) % MENU_ITEM_COUNT;
       drawMenu(selectedItem, draftClockPrecision, draftVolume,
+               draftDisplaySleepEnabled, draftDisplaySleepMinutes,
+               draftDisplayBrightnessPercent,
                draftForecastSchedules);
     }
 
     if (selectPressed) {
+      noteDisplayActivity();
       switch (selectedItem) {
         case MENU_CLOCK:
           draftClockPrecision =
@@ -314,6 +439,28 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
         case MENU_VOLUME:
           draftVolume = draftVolume >= 100 ? 0 : draftVolume + 10;
           speech.setVolumePercent(draftVolume);
+          break;
+        case MENU_DISPLAY_SLEEP:
+          draftDisplaySleepEnabled = !draftDisplaySleepEnabled;
+          break;
+        case MENU_DISPLAY_SLEEP_TIMEOUT:
+          if (draftDisplaySleepMinutes == 1) {
+            draftDisplaySleepMinutes = 5;
+          } else if (draftDisplaySleepMinutes == 5) {
+            draftDisplaySleepMinutes = 10;
+          } else if (draftDisplaySleepMinutes == 10) {
+            draftDisplaySleepMinutes = 30;
+          } else {
+            draftDisplaySleepMinutes = 1;
+          }
+          break;
+        case MENU_DISPLAY_BRIGHTNESS:
+          draftDisplayBrightnessPercent =
+              draftDisplayBrightnessPercent >= 100
+                  ? 20
+                  : draftDisplayBrightnessPercent + 20;
+          M5.Lcd.setBrightness(AppSettings::displayBrightnessLevel(
+              draftDisplayBrightnessPercent));
           break;
         case MENU_FORECAST_1_ENABLED:
         case MENU_FORECAST_1_HOUR:
@@ -344,6 +491,7 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           } else {
             showMessage("ALARM TEST", "Speech unavailable");
           }
+          noteDisplayActivity();
           break;
         case MENU_SPEECH_TEST:
           if (!speechAvailable) {
@@ -353,9 +501,13 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           } else {
             speech.speak("音声テストです。音量を確認してください。");
           }
+          noteDisplayActivity();
           break;
         case MENU_DIAGNOSTICS:
-          showDiagnostics(diagnostics);
+          showDiagnostics(diagnostics, draftDisplaySleepEnabled,
+                          draftDisplaySleepMinutes,
+                          draftDisplayBrightnessPercent);
+          noteDisplayActivity();
           break;
         case MENU_SAVE_AND_EXIT:
           if (speech.isSpeaking()) {
@@ -363,11 +515,15 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           }
           disableDuplicateForecastSchedules(draftForecastSchedules);
           settings.save(draftClockPrecision, draftVolume,
+                        draftDisplaySleepEnabled, draftDisplaySleepMinutes,
+                        draftDisplayBrightnessPercent,
                         draftForecastSchedules);
           showMessage("SETTINGS SAVED", "Returning to weather");
           return;
       }
       drawMenu(selectedItem, draftClockPrecision, draftVolume,
+               draftDisplaySleepEnabled, draftDisplaySleepMinutes,
+               draftDisplayBrightnessPercent,
                draftForecastSchedules);
     }
 

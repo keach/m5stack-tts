@@ -2,20 +2,59 @@
 
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
-constexpr int MENU_ITEM_COUNT = 9;
-constexpr int MENU_ITEMS_PER_PAGE = 5;
+constexpr int MENU_ITEM_COUNT = 15;
+constexpr int MENU_PAGE_COUNT = 2;
 
 enum MenuItem {
   MENU_CLOCK,
   MENU_VOLUME,
-  MENU_FORECAST_1,
-  MENU_FORECAST_2,
-  MENU_FORECAST_3,
+  MENU_FORECAST_1_ENABLED,
+  MENU_FORECAST_1_HOUR,
+  MENU_FORECAST_1_MINUTE,
+  MENU_FORECAST_2_ENABLED,
+  MENU_FORECAST_2_HOUR,
+  MENU_FORECAST_2_MINUTE,
+  MENU_FORECAST_3_ENABLED,
+  MENU_FORECAST_3_HOUR,
+  MENU_FORECAST_3_MINUTE,
   MENU_ALARM_TEST,
   MENU_SPEECH_TEST,
   MENU_DIAGNOSTICS,
   MENU_SAVE_AND_EXIT,
 };
+
+int forecastScheduleIndex(int item) {
+  return (item - MENU_FORECAST_1_ENABLED) / 3;
+}
+
+int forecastFieldIndex(int item) {
+  return (item - MENU_FORECAST_1_ENABLED) % 3;
+}
+
+bool isForecastMenuItem(int item) {
+  return item >= MENU_FORECAST_1_ENABLED && item <= MENU_FORECAST_3_MINUTE;
+}
+
+int menuPage(int item) {
+  return item <= MENU_FORECAST_3_MINUTE ? 0 : 1;
+}
+
+void disableDuplicateForecastSchedules(
+    AppSettings::ForecastSchedule* schedules) {
+  for (size_t index = 0; index < AppSettings::FORECAST_SCHEDULE_COUNT;
+       ++index) {
+    if (!schedules[index].enabled) {
+      continue;
+    }
+    for (size_t previous = 0; previous < index; ++previous) {
+      if (schedules[previous].enabled &&
+          schedules[previous].minuteOfDay == schedules[index].minuteOfDay) {
+        schedules[index].enabled = false;
+        break;
+      }
+    }
+  }
+}
 }  // namespace
 
 bool SettingsMode::confirmedPress(Button& button,
@@ -47,23 +86,33 @@ void SettingsMode::drawMenu(int selectedItem,
   M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
   M5.Lcd.setTextSize(2);
-  constexpr int pageCount =
-      (MENU_ITEM_COUNT + MENU_ITEMS_PER_PAGE - 1) / MENU_ITEMS_PER_PAGE;
-  const int currentPage = selectedItem / MENU_ITEMS_PER_PAGE;
+  const int currentPage = menuPage(selectedItem);
   char title[24];
-  snprintf(title, sizeof(title), "SETTINGS %d/%d", currentPage + 1, pageCount);
+  snprintf(title, sizeof(title), "SETTINGS %d/%d", currentPage + 1,
+           MENU_PAGE_COUNT);
   M5.Lcd.setCursor(max(0, (320 - M5.Lcd.textWidth(title)) / 2), 8);
   M5.Lcd.print(title);
 
-  const int firstItem = currentPage * MENU_ITEMS_PER_PAGE;
-  const int lastItem = min(firstItem + MENU_ITEMS_PER_PAGE, MENU_ITEM_COUNT);
-  for (int item = firstItem; item < lastItem; ++item) {
-    const int row = item - firstItem;
+  const int firstItem = currentPage == 0 ? MENU_CLOCK : MENU_ALARM_TEST;
+  const int visibleItemCount = currentPage == 0 ? 5 : 4;
+  for (int row = 0; row < visibleItemCount; ++row) {
+    int item = firstItem + row;
+    if (currentPage == 0 && row >= 2) {
+      item = MENU_FORECAST_1_ENABLED + (row - 2) * 3;
+    }
     const int y = 43 + row * 34;
-    const bool selected = item == selectedItem;
+    const bool forecastItem = isForecastMenuItem(item);
+    const bool selected = forecastItem
+                              ? isForecastMenuItem(selectedItem) &&
+                                    forecastScheduleIndex(item) ==
+                                        forecastScheduleIndex(selectedItem)
+                              : item == selectedItem;
     const uint16_t background = selected ? TFT_DARKCYAN : TFT_BLACK;
-    M5.Lcd.fillRect(5, y - 3, 310, 27, background);
-    M5.Lcd.setTextColor(selected ? TFT_WHITE : TFT_LIGHTGREY, background);
+    M5.Lcd.fillRect(5, y - 3, 310, 27,
+                    forecastItem ? TFT_BLACK : background);
+    M5.Lcd.setTextColor(
+        selected && !forecastItem ? TFT_WHITE : TFT_LIGHTGREY,
+        forecastItem ? TFT_BLACK : background);
     M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(10, y);
 
@@ -77,19 +126,44 @@ void SettingsMode::drawMenu(int selectedItem,
       case MENU_VOLUME:
         M5.Lcd.printf("Volume: %u%%", volumePercent);
         break;
-      case MENU_FORECAST_1:
-      case MENU_FORECAST_2:
-      case MENU_FORECAST_3: {
-        const int scheduleIndex = item - MENU_FORECAST_1;
+      case MENU_FORECAST_1_ENABLED:
+      case MENU_FORECAST_2_ENABLED:
+      case MENU_FORECAST_3_ENABLED: {
+        const int scheduleIndex = forecastScheduleIndex(item);
         const AppSettings::ForecastSchedule& schedule =
             forecastSchedules[scheduleIndex];
-        if (schedule.enabled) {
-          M5.Lcd.printf("Forecast %d: %02u:%02u", scheduleIndex + 1,
-                        schedule.minuteOfDay / 60,
-                        schedule.minuteOfDay % 60);
-        } else {
-          M5.Lcd.printf("Forecast %d: Off", scheduleIndex + 1);
-        }
+        const uint16_t hour = schedule.minuteOfDay / 60;
+        const uint16_t minute = schedule.minuteOfDay % 60;
+        const int selectedField = selected ? forecastFieldIndex(selectedItem)
+                                           : -1;
+        M5.Lcd.printf("Forecast %d: ", scheduleIndex + 1);
+        const int enabledX = M5.Lcd.getCursorX();
+        const char* enabledText = schedule.enabled ? "On " : "Off";
+        M5.Lcd.fillRect(enabledX - 2, y - 3, 40, 27,
+                        selectedField == 0 ? TFT_DARKCYAN : TFT_BLACK);
+        M5.Lcd.setTextColor(selectedField == 0 ? TFT_WHITE : TFT_LIGHTGREY,
+                            selectedField == 0 ? TFT_DARKCYAN : TFT_BLACK);
+        M5.Lcd.setCursor(enabledX, y);
+        M5.Lcd.print(enabledText);
+
+        const int hourX = enabledX + 48;
+        M5.Lcd.fillRect(hourX - 2, y - 3, 28, 27,
+                        selectedField == 1 ? TFT_DARKCYAN : TFT_BLACK);
+        M5.Lcd.setTextColor(selectedField == 1 ? TFT_WHITE : TFT_LIGHTGREY,
+                            selectedField == 1 ? TFT_DARKCYAN : TFT_BLACK);
+        M5.Lcd.setCursor(hourX, y);
+        M5.Lcd.printf("%02u", hour);
+
+        M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        M5.Lcd.setCursor(hourX + 27, y);
+        M5.Lcd.print(":");
+        const int minuteX = hourX + 39;
+        M5.Lcd.fillRect(minuteX - 2, y - 3, 28, 27,
+                        selectedField == 2 ? TFT_DARKCYAN : TFT_BLACK);
+        M5.Lcd.setTextColor(selectedField == 2 ? TFT_WHITE : TFT_LIGHTGREY,
+                            selectedField == 2 ? TFT_DARKCYAN : TFT_BLACK);
+        M5.Lcd.setCursor(minuteX, y);
+        M5.Lcd.printf("%02u", minute);
         break;
       }
       case MENU_ALARM_TEST:
@@ -225,18 +299,26 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           draftVolume = draftVolume >= 100 ? 0 : draftVolume + 10;
           speech.setVolumePercent(draftVolume);
           break;
-        case MENU_FORECAST_1:
-        case MENU_FORECAST_2:
-        case MENU_FORECAST_3: {
+        case MENU_FORECAST_1_ENABLED:
+        case MENU_FORECAST_1_HOUR:
+        case MENU_FORECAST_1_MINUTE:
+        case MENU_FORECAST_2_ENABLED:
+        case MENU_FORECAST_2_HOUR:
+        case MENU_FORECAST_2_MINUTE:
+        case MENU_FORECAST_3_ENABLED:
+        case MENU_FORECAST_3_HOUR:
+        case MENU_FORECAST_3_MINUTE: {
           AppSettings::ForecastSchedule& schedule =
-              draftForecastSchedules[selectedItem - MENU_FORECAST_1];
-          if (!schedule.enabled) {
-            schedule.enabled = true;
-            schedule.minuteOfDay = 0;
-          } else if (schedule.minuteOfDay >= 23 * 60 + 45) {
-            schedule.enabled = false;
+              draftForecastSchedules[forecastScheduleIndex(selectedItem)];
+          const int fieldIndex = forecastFieldIndex(selectedItem);
+          if (fieldIndex == 0) {
+            schedule.enabled = !schedule.enabled;
+          } else if (fieldIndex == 1) {
+            const uint16_t hour = (schedule.minuteOfDay / 60 + 1) % 24;
+            schedule.minuteOfDay = hour * 60 + schedule.minuteOfDay % 60;
           } else {
-            schedule.minuteOfDay += 15;
+            const uint16_t minute = (schedule.minuteOfDay % 60 + 15) % 60;
+            schedule.minuteOfDay = (schedule.minuteOfDay / 60) * 60 + minute;
           }
           break;
         }
@@ -263,6 +345,7 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           if (speech.isSpeaking()) {
             speech.stop();
           }
+          disableDuplicateForecastSchedules(draftForecastSchedules);
           settings.save(draftClockPrecision, draftVolume,
                         draftForecastSchedules);
           showMessage("SETTINGS SAVED", "Returning to weather");

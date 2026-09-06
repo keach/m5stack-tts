@@ -138,7 +138,7 @@ SettingsMode::DisplaySleepUpdate SettingsMode::updateDisplaySleep(
 
   const unsigned long timeoutMs =
       static_cast<unsigned long>(timeoutMinutes) * 60UL * 1000UL;
-  if (enabled && !inhibitSleep &&
+  if (enabled && !inhibitSleep && !buttonPressed &&
       millis() - lastDisplayActivity_ >= timeoutMs) {
     displaySleeping_ = true;
     wakeConfirmationPending_ = false;

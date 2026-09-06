@@ -2,8 +2,7 @@
 
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
-constexpr int MENU_ITEM_COUNT = 15;
-constexpr int MENU_PAGE_COUNT = 2;
+constexpr int MENU_ROWS_PER_PAGE = 5;
 
 enum MenuItem {
   MENU_CLOCK,
@@ -22,6 +21,17 @@ enum MenuItem {
   MENU_DIAGNOSTICS,
   MENU_SAVE_AND_EXIT,
 };
+constexpr int MENU_ITEM_COUNT = MENU_SAVE_AND_EXIT + 1;
+
+constexpr MenuItem MENU_ROW_ITEMS[] = {
+    MENU_CLOCK,              MENU_VOLUME,          MENU_FORECAST_1_ENABLED,
+    MENU_FORECAST_2_ENABLED, MENU_FORECAST_3_ENABLED,
+    MENU_ALARM_TEST,         MENU_SPEECH_TEST,     MENU_DIAGNOSTICS,
+    MENU_SAVE_AND_EXIT,
+};
+constexpr int MENU_ROW_COUNT = sizeof(MENU_ROW_ITEMS) / sizeof(MenuItem);
+constexpr int MENU_PAGE_COUNT =
+    (MENU_ROW_COUNT + MENU_ROWS_PER_PAGE - 1) / MENU_ROWS_PER_PAGE;
 
 int forecastScheduleIndex(int item) {
   return (item - MENU_FORECAST_1_ENABLED) / 3;
@@ -35,8 +45,16 @@ bool isForecastMenuItem(int item) {
   return item >= MENU_FORECAST_1_ENABLED && item <= MENU_FORECAST_3_MINUTE;
 }
 
-int menuPage(int item) {
-  return item <= MENU_FORECAST_3_MINUTE ? 0 : 1;
+int menuRow(int item) {
+  for (int row = 0; row < MENU_ROW_COUNT; ++row) {
+    const int rowItem = MENU_ROW_ITEMS[row];
+    if (rowItem == item ||
+        (isForecastMenuItem(rowItem) && isForecastMenuItem(item) &&
+         forecastScheduleIndex(rowItem) == forecastScheduleIndex(item))) {
+      return row;
+    }
+  }
+  return 0;
 }
 
 void disableDuplicateForecastSchedules(
@@ -86,20 +104,18 @@ void SettingsMode::drawMenu(int selectedItem,
   M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
   M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
   M5.Lcd.setTextSize(2);
-  const int currentPage = menuPage(selectedItem);
+  const int currentPage = menuRow(selectedItem) / MENU_ROWS_PER_PAGE;
   char title[24];
   snprintf(title, sizeof(title), "SETTINGS %d/%d", currentPage + 1,
            MENU_PAGE_COUNT);
   M5.Lcd.setCursor(max(0, (320 - M5.Lcd.textWidth(title)) / 2), 8);
   M5.Lcd.print(title);
 
-  const int firstItem = currentPage == 0 ? MENU_CLOCK : MENU_ALARM_TEST;
-  const int visibleItemCount = currentPage == 0 ? 5 : 4;
-  for (int row = 0; row < visibleItemCount; ++row) {
-    int item = firstItem + row;
-    if (currentPage == 0 && row >= 2) {
-      item = MENU_FORECAST_1_ENABLED + (row - 2) * 3;
-    }
+  const int firstRow = currentPage * MENU_ROWS_PER_PAGE;
+  const int lastRow = min(firstRow + MENU_ROWS_PER_PAGE, MENU_ROW_COUNT);
+  for (int menuRowIndex = firstRow; menuRowIndex < lastRow; ++menuRowIndex) {
+    const int row = menuRowIndex - firstRow;
+    const int item = MENU_ROW_ITEMS[menuRowIndex];
     const int y = 43 + row * 34;
     const bool forecastItem = isForecastMenuItem(item);
     const bool selected = forecastItem

@@ -34,8 +34,6 @@ constexpr unsigned long MANUAL_WEATHER_MIN_INTERVAL_MS = 30UL * 1000UL;
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
 constexpr unsigned long FORECAST_SCREEN_TIMEOUT_MS = 60UL * 1000UL;
-constexpr unsigned long DISPLAY_SLEEP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
-constexpr uint8_t DISPLAY_BRIGHTNESS = 100;
 constexpr unsigned long SPLASH_DURATION_MS = 3000;
 constexpr unsigned long SETTINGS_ENTRY_HOLD_MS = 1000;
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
@@ -126,6 +124,10 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
+bool displaySleepEnabled = AppSettings::DEFAULT_DISPLAY_SLEEP_ENABLED;
+uint8_t displaySleepMinutes = AppSettings::DEFAULT_DISPLAY_SLEEP_MINUTES;
+uint8_t displayBrightnessPercent =
+    AppSettings::DEFAULT_DISPLAY_BRIGHTNESS_PERCENT;
 unsigned long displayWakePressDetectedAt = 0;
 bool displayWakeConfirmationPending = false;
 unsigned long buttonAPressDetectedAt = 0;
@@ -698,6 +700,10 @@ void drawMainScreen() {
 
 void noteDisplayActivity() { lastDisplayActivity = millis(); }
 
+unsigned long displaySleepTimeoutMs() {
+  return static_cast<unsigned long>(displaySleepMinutes) * 60UL * 1000UL;
+}
+
 const char* displayWakeReasonName(DisplayWakeReason reason) {
   switch (reason) {
     case DisplayWakeReason::Button:
@@ -715,7 +721,8 @@ void wakeDisplay(DisplayWakeReason reason) {
   displayWakeConfirmationPending = false;
   if (displaySleeping) {
     M5.Lcd.wakeup();
-    M5.Lcd.setBrightness(DISPLAY_BRIGHTNESS);
+    M5.Lcd.setBrightness(
+        AppSettings::displayBrightnessLevel(displayBrightnessPercent));
     displaySleeping = false;
     Serial.printf("Display woke up (reason: %s).\n",
                   displayWakeReasonName(reason));
@@ -1224,11 +1231,14 @@ void setup() {
   // so that card detection and errors can be handled explicitly.
   M5.begin(true, false, true);
   Serial.begin(115200);
-  M5.Lcd.setBrightness(DISPLAY_BRIGHTNESS);
-  noteDisplayActivity();
-
   appSettings.begin();
   clockDisplayPrecision = appSettings.clockPrecision();
+  displaySleepEnabled = appSettings.displaySleepEnabled();
+  displaySleepMinutes = appSettings.displaySleepMinutes();
+  displayBrightnessPercent = appSettings.displayBrightnessPercent();
+  M5.Lcd.setBrightness(
+      AppSettings::displayBrightnessLevel(displayBrightnessPercent));
+  noteDisplayActivity();
   speech.setVolumePercent(appSettings.volumePercent());
   const bool settingsRequested = showSplashScreen();
 
@@ -1258,6 +1268,11 @@ void setup() {
     };
     settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
     clockDisplayPrecision = appSettings.clockPrecision();
+    displaySleepEnabled = appSettings.displaySleepEnabled();
+    displaySleepMinutes = appSettings.displaySleepMinutes();
+    displayBrightnessPercent = appSettings.displayBrightnessPercent();
+    M5.Lcd.setBrightness(
+        AppSettings::displayBrightnessLevel(displayBrightnessPercent));
     speech.setVolumePercent(appSettings.volumePercent());
     noteDisplayActivity();
   }
@@ -1354,8 +1369,8 @@ void loop() {
     lastDisplayUpdate = now;
     drawDateTime();
   }
-  if (!displaySleeping &&
-      now - lastDisplayActivity >= DISPLAY_SLEEP_TIMEOUT_MS) {
+  if (displaySleepEnabled && !displaySleeping &&
+      now - lastDisplayActivity >= displaySleepTimeoutMs()) {
     sleepDisplay();
   }
 }

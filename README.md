@@ -68,6 +68,18 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
+### Flashパーティション
+
+4MB Flashのうちアプリ領域を十分に確保するため、`platformio.ini`で`min_spiffs.csv`を指定しています。アプリ領域はOTA用に1,966,080 bytesずつ2面を維持し、使用していないSPIFFS領域を131,072 bytesへ縮小します。NVS領域の位置と容量は標準構成から変わりません。
+
+パーティション構成を変更した後の初回書き込みは、M5Stack BasicをUSBで接続して行ってください。SPIFFSの内容は保持されませんが、このプロジェクトの辞書とログはmicroSDを使用するため影響しません。
+
+従来のパーティション構成へ切り戻す場合は、`platformio.ini`から次の行を削除し、USB経由でもう一度書き込みます。
+
+```ini
+board_build.partitions = min_spiffs.csv
+```
+
 ## Wi-Fi・天気設定
 
 サンプルをコピーして、接続先のSSIDとパスワードを設定します。

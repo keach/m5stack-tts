@@ -93,6 +93,12 @@ enum class MainScreen {
   Forecast,
 };
 
+enum class DisplayWakeReason {
+  Button,
+  Notification,
+  ScheduledForecast,
+};
+
 enum class WeatherRequestSource {
   Startup,
   ManualButton,
@@ -120,6 +126,8 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
+unsigned long displayWakePressDetectedAt = 0;
+bool displayWakeConfirmationPending = false;
 unsigned long buttonAPressDetectedAt = 0;
 bool buttonAConfirmationPending = false;
 ClockDisplayPrecision clockDisplayPrecision = ClockDisplayPrecision::Minutes;
@@ -690,13 +698,27 @@ void drawMainScreen() {
 
 void noteDisplayActivity() { lastDisplayActivity = millis(); }
 
-void wakeDisplay() {
+const char* displayWakeReasonName(DisplayWakeReason reason) {
+  switch (reason) {
+    case DisplayWakeReason::Button:
+      return "button";
+    case DisplayWakeReason::Notification:
+      return "notification";
+    case DisplayWakeReason::ScheduledForecast:
+      return "scheduled forecast";
+  }
+  return "unknown";
+}
+
+void wakeDisplay(DisplayWakeReason reason) {
   noteDisplayActivity();
+  displayWakeConfirmationPending = false;
   if (displaySleeping) {
     M5.Lcd.wakeup();
     M5.Lcd.setBrightness(DISPLAY_BRIGHTNESS);
     displaySleeping = false;
-    Serial.println("Display woke up.");
+    Serial.printf("Display woke up (reason: %s).\n",
+                  displayWakeReasonName(reason));
   }
   drawDateTime();
   drawMainScreen();
@@ -883,7 +905,7 @@ void runScheduledForecastSpeech() {
   }
   mainScreen = MainScreen::Forecast;
   lastForecastInteraction = millis();
-  wakeDisplay();
+  wakeDisplay(DisplayWakeReason::ScheduledForecast);
   Serial.printf("Starting scheduled forecast speech for %02d:%02d JST.\n",
                 localTime.tm_hour, localTime.tm_min);
   speakForecast();
@@ -1130,7 +1152,7 @@ void applyNotificationPlan() {
     return;
   }
 
-  wakeDisplay();
+  wakeDisplay(DisplayWakeReason::Notification);
 
   if (notificationPlan.temperatureAudioRequested) {
     temperatureAlerts.notify(weather.temperature,
@@ -1252,16 +1274,33 @@ void loop() {
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
 
-  if (displaySleeping &&
-      (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed())) {
-    buttonAConfirmationPending = false;
-    wakeDisplay();
-    return;
+  if (displaySleeping) {
+    const bool wakeButtonPressed =
+        M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed();
+    if (!displayWakeConfirmationPending && wakeButtonPressed) {
+      displayWakeConfirmationPending = true;
+      displayWakePressDetectedAt = millis();
+      Serial.printf("Display wake signal detected (A:%d B:%d C:%d).\n",
+                    M5.BtnA.isPressed(), M5.BtnB.isPressed(),
+                    M5.BtnC.isPressed());
+    }
+    if (displayWakeConfirmationPending) {
+      if (!wakeButtonPressed) {
+        displayWakeConfirmationPending = false;
+        Serial.println("Display wake signal rejected as too short.");
+      } else if (millis() - displayWakePressDetectedAt >=
+                 BUTTON_CONFIRMATION_MS) {
+        buttonAConfirmationPending = false;
+        Serial.println("Display wake button press confirmed.");
+        wakeDisplay(DisplayWakeReason::Button);
+        return;
+      }
+    }
   }
 
   runScheduledForecastSpeech();
 
-  if (M5.BtnA.wasPressed()) {
+  if (!displaySleeping && M5.BtnA.wasPressed()) {
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
     Serial.printf("Button A signal detected (raw pin: %d).\n",
@@ -1283,14 +1322,14 @@ void loop() {
   }
   if (scheduledForecastStopButtonConsumed) {
     scheduledForecastStopButtonConsumed = false;
-  } else if (M5.BtnB.wasPressed()) {
+  } else if (!displaySleeping && M5.BtnB.wasPressed()) {
     noteDisplayActivity();
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }
     toggleScreenSpeech();
   }
-  if (M5.BtnC.wasPressed()) {
+  if (!displaySleeping && M5.BtnC.wasPressed()) {
     noteDisplayActivity();
     mainScreen = mainScreen == MainScreen::CurrentWeather
                      ? MainScreen::Forecast

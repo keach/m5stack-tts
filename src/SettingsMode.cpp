@@ -1,5 +1,7 @@
 #include "SettingsMode.h"
 
+#include "FirmwareInfo.h"
+
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr int MENU_ROWS_PER_PAGE = 5;
@@ -22,6 +24,7 @@ enum MenuItem {
   MENU_ALARM_TEST,
   MENU_SPEECH_TEST,
   MENU_DIAGNOSTICS,
+  MENU_FIRMWARE_INFO,
   MENU_SAVE_AND_EXIT,
 };
 constexpr int MENU_ITEM_COUNT = MENU_SAVE_AND_EXIT + 1;
@@ -32,7 +35,7 @@ constexpr MenuItem MENU_ROW_ITEMS[] = {
     MENU_FORECAST_1_ENABLED,
     MENU_FORECAST_2_ENABLED, MENU_FORECAST_3_ENABLED,
     MENU_ALARM_TEST,         MENU_SPEECH_TEST,     MENU_DIAGNOSTICS,
-    MENU_SAVE_AND_EXIT,
+    MENU_FIRMWARE_INFO,      MENU_SAVE_AND_EXIT,
 };
 constexpr int MENU_ROW_COUNT = sizeof(MENU_ROW_ITEMS) / sizeof(MenuItem);
 constexpr int MENU_PAGE_COUNT =
@@ -259,6 +262,9 @@ void SettingsMode::drawMenu(int selectedItem,
       case MENU_DIAGNOSTICS:
         M5.Lcd.print("Diagnostics");
         break;
+      case MENU_FIRMWARE_INFO:
+        M5.Lcd.print("Firmware info");
+        break;
       case MENU_SAVE_AND_EXIT:
         M5.Lcd.print("Save and exit");
         break;
@@ -328,6 +334,35 @@ void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics) {
   M5.Lcd.print("Any button: back");
 }
 
+void SettingsMode::drawFirmwareInfo() {
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
+  M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(76, 8);
+  M5.Lcd.print("FIRMWARE INFO");
+
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(16, 56);
+  M5.Lcd.print("Version");
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setCursor(16, 82);
+  M5.Lcd.print(FIRMWARE_VERSION);
+
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(16, 126);
+  M5.Lcd.print("Commit Date");
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setCursor(16, 152);
+  M5.Lcd.print(FIRMWARE_COMMIT_DATE);
+
+  M5.Lcd.fillRect(0, 218, 320, 22, TFT_NAVY);
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setCursor(100, 225);
+  M5.Lcd.print("Any button: back");
+}
+
 void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
                                    bool displaySleepEnabled,
                                    uint8_t displaySleepMinutes,
@@ -342,6 +377,36 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
         false);
     if (sleepUpdate == DisplaySleepUpdate::Woke) {
       drawDiagnostics(diagnostics);
+      delay(10);
+      continue;
+    }
+    if (sleepUpdate == DisplaySleepUpdate::Sleeping) {
+      delay(10);
+      continue;
+    }
+    if (confirmedPress(M5.BtnA, buttonA_) ||
+        confirmedPress(M5.BtnB, buttonB_) ||
+        confirmedPress(M5.BtnC, buttonC_)) {
+      noteDisplayActivity();
+      return;
+    }
+    delay(10);
+  }
+}
+
+void SettingsMode::showFirmwareInfo(bool displaySleepEnabled,
+                                    uint8_t displaySleepMinutes,
+                                    uint8_t displayBrightnessPercent) {
+  noteDisplayActivity();
+  drawFirmwareInfo();
+
+  while (true) {
+    M5.update();
+    const DisplaySleepUpdate sleepUpdate = updateDisplaySleep(
+        displaySleepEnabled, displaySleepMinutes, displayBrightnessPercent,
+        false);
+    if (sleepUpdate == DisplaySleepUpdate::Woke) {
+      drawFirmwareInfo();
       delay(10);
       continue;
     }
@@ -507,6 +572,12 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           showDiagnostics(diagnostics, draftDisplaySleepEnabled,
                           draftDisplaySleepMinutes,
                           draftDisplayBrightnessPercent);
+          noteDisplayActivity();
+          break;
+        case MENU_FIRMWARE_INFO:
+          showFirmwareInfo(draftDisplaySleepEnabled,
+                           draftDisplaySleepMinutes,
+                           draftDisplayBrightnessPercent);
           noteDisplayActivity();
           break;
         case MENU_SAVE_AND_EXIT:

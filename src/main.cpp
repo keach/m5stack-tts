@@ -16,6 +16,7 @@
 #include "RainForecastAlertService.h"
 #include "SdCardLock.h"
 #include "SettingsMode.h"
+#include "FirmwareInfo.h"
 #include "SpeechService.h"
 #include "SpeechNumberFormatter.h"
 #include "TemperatureAlertService.h"
@@ -1231,6 +1232,8 @@ void setup() {
   // so that card detection and errors can be handled explicitly.
   M5.begin(true, false, true);
   Serial.begin(115200);
+  Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
+  Serial.printf("Firmware commit date: %s\n", FIRMWARE_COMMIT_DATE);
   appSettings.begin();
   clockDisplayPrecision = appSettings.clockPrecision();
   displaySleepEnabled = appSettings.displaySleepEnabled();

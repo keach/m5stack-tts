@@ -43,6 +43,10 @@ class SettingsMode {
                        bool displaySleepEnabled, uint8_t displaySleepMinutes,
                        uint8_t displayBrightnessPercent);
   void drawDiagnostics(const DiagnosticStatus& diagnostics);
+  void showFirmwareInfo(bool displaySleepEnabled,
+                        uint8_t displaySleepMinutes,
+                        uint8_t displayBrightnessPercent);
+  void drawFirmwareInfo();
   void showMessage(const char* title, const char* detail);
   void noteDisplayActivity();
   DisplaySleepUpdate updateDisplaySleep(bool enabled, uint8_t timeoutMinutes,

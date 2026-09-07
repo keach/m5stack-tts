@@ -18,6 +18,7 @@ constexpr char QUEUE_BACKUP_PATH[] = "/thingspeak_queue.bak";
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr uint16_t REQUEST_TIMEOUT_MS = 10000;
 constexpr unsigned long MINIMUM_REQUEST_INTERVAL_MS = 15000;
+constexpr unsigned long PENDING_QUEUE_RETRY_INTERVAL_MS = 5000;
 constexpr size_t MAX_BATCH_RECORDS = 10;
 
 enum class QueueAppendResult { Added, Duplicate, Failed };
@@ -189,6 +190,69 @@ bool ThingSpeakPublisher::requestIntervalElapsed() const {
          millis() - lastRequestStartedAt_ >= MINIMUM_REQUEST_INTERVAL_MS;
 }
 
+bool ThingSpeakPublisher::preserveInRam(JsonDocument& record) {
+  const char* createdAt = record["created_at"] | "";
+  for (size_t offset = 0; offset < pendingCount_; ++offset) {
+    const size_t index =
+        (pendingHead_ + offset) % RAM_PENDING_CAPACITY;
+    const char* pendingCreatedAt =
+        pendingRecords_[index]["created_at"] | "";
+    if (strcmp(createdAt, pendingCreatedAt) == 0) {
+      Serial.printf(
+          "ThingSpeak RAM fallback already contains created_at=%s; "
+          "duplicate skipped.\n",
+          createdAt);
+      return true;
+    }
+  }
+  if (pendingCount_ >= RAM_PENDING_CAPACITY) {
+    Serial.printf(
+        "ThingSpeak RAM fallback is full; created_at=%s could not be "
+        "preserved.\n",
+        createdAt);
+    return false;
+  }
+  const size_t tail =
+      (pendingHead_ + pendingCount_) % RAM_PENDING_CAPACITY;
+  pendingRecords_[tail].set(record.as<JsonObjectConst>());
+  ++pendingCount_;
+  lastPendingRetryAt_ = millis();
+  Serial.printf(
+      "ThingSpeak record preserved in RAM until SD queue retry: %s.\n",
+      createdAt);
+  return true;
+}
+
+bool ThingSpeakPublisher::queueOrPreserve(JsonDocument& record) {
+  const QueueAppendResult result = appendToQueue(record);
+  if (result != QueueAppendResult::Failed) {
+    return true;
+  }
+  return preserveInRam(record);
+}
+
+void ThingSpeakPublisher::handle() {
+  if (pendingCount_ == 0 ||
+      millis() - lastPendingRetryAt_ < PENDING_QUEUE_RETRY_INTERVAL_MS) {
+    return;
+  }
+  lastPendingRetryAt_ = millis();
+  if (!recoverQueueFiles()) {
+    return;
+  }
+  JsonDocument& record = pendingRecords_[pendingHead_];
+  const QueueAppendResult result = appendToQueue(record);
+  if (result == QueueAppendResult::Failed) {
+    return;
+  }
+  const char* createdAt = record["created_at"] | "";
+  Serial.printf("ThingSpeak RAM fallback moved to SD queue: %s.\n",
+                createdAt);
+  record.clear();
+  pendingHead_ = (pendingHead_ + 1) % RAM_PENDING_CAPACITY;
+  --pendingCount_;
+}
+
 ThingSpeakPublishResult ThingSpeakPublisher::postSingle(JsonDocument& record) {
   JsonDocument payload;
   payload["api_key"] = THINGSPEAK_WRITE_API_KEY;
@@ -322,15 +386,17 @@ ThingSpeakPublishResult ThingSpeakPublisher::publish(
   buildRecord(record, observedAt, temperature, humidity, pressure,
               weatherConditionId, precipitationProbability,
               temperatureAlertThreshold, wifiRssi, rainAlertActive);
-  if (!recoverQueueFiles()) return ThingSpeakPublishResult::RequestFailed;
+  if (!recoverQueueFiles()) {
+    preserveInRam(record);
+    return ThingSpeakPublishResult::RequestFailed;
+  }
   const bool queuedRecordsExist = queueHasRecords();
-  if (queuedRecordsExist &&
-      appendToQueue(record) == QueueAppendResult::Failed) {
+  if (queuedRecordsExist && !queueOrPreserve(record)) {
     return ThingSpeakPublishResult::RequestFailed;
   }
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("ThingSpeak upload deferred because Wi-Fi is disconnected.");
-    if (!queuedRecordsExist) appendToQueue(record);
+    if (!queuedRecordsExist) queueOrPreserve(record);
     return ThingSpeakPublishResult::WiFiDisconnected;
   }
   if (!requestIntervalElapsed()) {
@@ -340,11 +406,11 @@ ThingSpeakPublishResult ThingSpeakPublisher::publish(
         "ThingSpeak upload deferred for %lu ms to preserve the request "
         "interval.\n",
         waitMs);
-    if (!queuedRecordsExist) appendToQueue(record);
+    if (!queuedRecordsExist) queueOrPreserve(record);
     return ThingSpeakPublishResult::RequestFailed;
   }
   if (queuedRecordsExist) return sendQueuedBatch();
   const ThingSpeakPublishResult result = postSingle(record);
-  if (result != ThingSpeakPublishResult::Sent) appendToQueue(record);
+  if (result != ThingSpeakPublishResult::Sent) queueOrPreserve(record);
   return result;
 }

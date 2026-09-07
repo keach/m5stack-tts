@@ -10,6 +10,7 @@ constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
     {"Temperature alerts", "/temperature_alerts.csv", "/download/temperature-alerts", "text/csv; charset=utf-8", "temperature_alerts.csv"},
     {"Rain alerts", "/rain_alerts.csv", "/download/rain-alerts", "text/csv; charset=utf-8", "rain_alerts.csv"},
     {"Ambient queue", "/ambient_queue.ndjson", "/download/ambient-queue", "application/x-ndjson", "ambient_queue.ndjson"},
+    {"ThingSpeak queue", "/thingspeak_queue.ndjson", "/download/thingspeak-queue", "application/x-ndjson", "thingspeak_queue.ndjson"},
     {"Rain forecast alerts", "/rain_forecast_alerts.csv", "/download/rain-forecast-alerts", "text/csv; charset=utf-8", "rain_forecast_alerts.csv"},
 };
 constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);

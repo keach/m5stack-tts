@@ -116,7 +116,7 @@ constexpr unsigned long THINGSPEAK_CHANNEL_ID = 1234567;
 constexpr char THINGSPEAK_WRITE_API_KEY[] = "your-write-api-key";
 ```
 
-ThingSpeakは `https://api.thingspeak.com/update.json` へJSON形式で送信します。Write API Keyに対応するチャネルへ保存し、レスポンスのチャネルIDが設定値と一致することを確認します。`created_at` にはOpenWeather APIから正常に現在天気を取得した時刻をUTCで指定します。送信項目は次のとおりです。
+ThingSpeakは通常時に `https://api.thingspeak.com/update.json` へJSON形式で送信します。Write API Keyに対応するチャネルへ保存し、レスポンスのチャネルIDが設定値と一致することを確認します。`created_at` にはOpenWeather APIから正常に現在天気を取得した時刻をUTCで指定します。送信項目は次のとおりです。
 
 | Field | フィールド名（日本語 / English） | 値 |
 | --- | --- | --- |
@@ -129,7 +129,9 @@ ThingSpeakは `https://api.thingspeak.com/update.json` へJSON形式で送信し
 | `field7` | Wi-Fi受信信号強度 / Wi-Fi RSSI | RSSI（dBm） |
 | `field8` | 降雨アラート / Rain Alert | なし `0`、発報中 `1` |
 
-ThingSpeakの無料ライセンスはチャネル更新間隔が15秒以上に制限されています。本プロジェクトは10分ごとの自動更新と、最短30秒間隔の手動更新なので制限内です。ThingSpeak送信に失敗しても天気表示、読み上げ、アラート、Ambient送信は継続します。初回実装ではThingSpeak用の再送キューは作成しません。
+ThingSpeakへの送信に失敗したデータは、認証情報を含めずmicroSDの `/thingspeak_queue.ndjson` へ保存します。SDロック取得や書き込みに一時的に失敗した場合は最大10件をRAMへ保持し、5秒間隔でSDキューへの保存を再試行します。次回の天気更新時に現在データをキュー末尾へ追加し、古いものから最大10件をBulk Update APIで再送します。成功した対象行だけをキューから削除し、失敗時は次回へ持ち越します。同じ `created_at` のレコードは重複登録しません。単件送信とBulk送信のリクエスト開始間隔は15秒以上とし、間隔内の更新は待機せずキューへ保存します。
+
+ThingSpeakの無料ライセンスはチャネル更新間隔が15秒以上に制限されています。本プロジェクトは送信処理側でも15秒の間隔を保証し、間隔内のデータは再送キューへ保存します。ThingSpeak送信に失敗しても天気表示、読み上げ、アラート、Ambient送信は継続します。
 
 起動時にWi-Fiへ接続した後、NTPサーバーから時刻を取得します。時刻は日本標準時（JST）で液晶とシリアルモニターに表示されます。液晶のデフォルト表示形式は `yyyy.mm.dd. ddd hh:mm` で、設定モードから秒表示へ切り替えられます。
 
@@ -196,6 +198,7 @@ Wi-Fi接続後、起動画面と設定モードの診断画面に表示される
 | 高温アラート | `/download/temperature-alerts` |
 | 降雨アラート | `/download/rain-alerts` |
 | Ambientキュー | `/download/ambient-queue` |
+| ThingSpeakキュー | `/download/thingspeak-queue` |
 | 降雨予報アラート | `/download/rain-forecast-alerts` |
 
 公開対象は上記の固定URLだけです。アップロード、更新、削除、任意パスによるファイル取得は提供しません。ファイルはRAMへ一括読み込みせず、microSDからそのまま送信します。SDカードが利用できない場合や他のSD処理と競合した場合は `503 Service Unavailable`、対象ファイルがまだ作成されていない場合は `404 Not Found` を返します。

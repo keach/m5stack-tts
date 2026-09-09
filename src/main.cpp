@@ -1287,6 +1287,7 @@ void setup() {
 void loop() {
   M5.update();
   webDownloadServer.handleClient();
+  thingSpeakPublisher.handle();
   processWeatherLogRetry();
   temperatureAlerts.processPendingLogs();
   rainAlerts.processPendingLog();

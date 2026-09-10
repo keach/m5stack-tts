@@ -1,6 +1,7 @@
 % Monitor the weather channel and alert when uploads stop or recover.
 % Copy this script into a ThingSpeak MATLAB Analysis app and replace the
-% configuration values below. Schedule it every 10 minutes with TimeControl.
+% configuration values below. Trigger it from the inactivity and recovery
+% React apps described in README.md.
 
 sourceChannelID = 0;
 sourceReadKey = '';
@@ -87,7 +88,7 @@ if sendAlert
         ["ThingSpeak-Alerts-API-Key", string(alertApiKey)]);
 
     % If alert delivery fails, do not persist the transition. The next
-    % TimeControl run can retry it instead of silently losing the alert.
+    % next React run can retry it instead of silently losing the alert.
     webwrite(alertUrl, 'body', alertBody, 'subject', alertSubject, ...
         alertOptions);
 end

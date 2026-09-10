@@ -135,7 +135,7 @@ ThingSpeakの無料ライセンスはチャネル更新間隔が15秒以上に�
 
 ### ThingSpeakでの送信停止監視
 
-`thingspeak/monitor_uploads.m` をThingSpeakのMATLAB Analysisへコピーし、TimeControlから10分ごとに実行すると、気象チャネルへの送信停止と復旧をメールで確認できます。最終entryから30分以上経過した状態を停止と判定します。
+`thingspeak/monitor_uploads.m` をThingSpeakのMATLAB Analysisへコピーし、2つのReactから実行すると、気象チャネルへの送信停止と復旧をメールで確認できます。最終entryから30分以上経過した状態を停止と判定します。
 
 監視状態は気象データとは別の非公開チャネルに保存します。監視用チャネルには次の2フィールドを作成してください。
 
@@ -150,16 +150,39 @@ ThingSpeakの無料ライセンスはチャネル更新間隔が15秒以上に�
 2. Account > My ProfileでAlerts API Keyを作成する
 3. Apps > MATLAB Analysisで新しいAnalysisを作成し、`thingspeak/monitor_uploads.m`を貼り付ける
 4. スクリプト冒頭の気象チャネルID、Read API Key、監視チャネルID、監視チャネルのRead/Write API Key、Alerts API Keyを設定する
-5. MATLAB Analysisの`Run & Save`で、監視チャネルへ初期状態が1件記録されることを確認する
-6. Apps > TimeControlでRecurringを選び、作成したMATLAB Analysisを10分ごとに実行する
+5. MATLAB Analysisの`Save and Run`で、監視チャネルへ初期状態が1件記録されることを確認する
+6. Apps > Reactで、次の停止検知用Reactと復旧検知用Reactを作成する
+
+停止検知用Reactは、気象チャネルに30分間entryが追加されなかったときだけMATLAB Analysisを実行します。
+
+- Condition Type: `No Data Check`
+- 対象チャネル: 気象チャネル
+- 無通信時間: `30 minutes`
+- Action: `MATLAB Analysis`
+- Code to execute: 手順3で作成したAnalysis
+- Options: `Run action only the first time the condition is met`
+
+復旧検知用Reactは、気象チャネルへentryが追加されるたびにMATLAB Analysisを実行します。本プロジェクトでは`field4`に正のOpenWeather weather condition IDを保存するため、これを実行条件として使用します。
+
+- Condition Type: `Numeric`
+- 対象: 気象チャネルの`field4`
+- 条件: `is greater than 0`
+- Test Frequency: `On Data Insertion`
+- Action: `MATLAB Analysis`
+- Code to execute: 手順3で作成したAnalysis
+- Options: `Run action each time condition is met`
 
 気象チャネルが公開の場合、`sourceReadKey`は空のまま使用できます。非公開の場合はRead API Keyを設定してください。認証情報を設定したMATLAB AnalysisのコードはGitHubなどへ公開しないでください。
 
-MATLAB Analysisは実行のたびに監視状態と経過分を記録します。正常状態で初めて実行した場合は、監視チャネルへ基準状態を保存するだけでメールを送りません。初回実行時点ですでに30分以上停止している場合は停止通知を送ります。その後は正常から停止、または停止から正常へ変化したときだけ通知し、同じ状態の間は通知を繰り返しません。通知APIが失敗した場合は状態遷移を保存せず、次の実行で通知を再試行します。
+MATLAB Analysisは実行のたびに監視状態と経過分を記録します。正常状態で初めて実行した場合は、監視チャネルへ基準状態を保存するだけでメールを送りません。初回実行時点ですでに30分以上停止している場合は停止通知を送ります。その後は正常から停止、または停止から正常へ変化したときだけ通知し、同じ状態の間は通知を繰り返しません。通知APIが失敗した場合は状態遷移を保存せず、次のReact実行で通知を再試行します。
+
+復旧検知用Reactは気象entryの追加直後に実行されるため、正常時の`field2`は通常0分付近になります。停止検知用Reactが発火した場合は、`field1=1`、`field2`は30分以上になります。
 
 動作確認では、まずM5Stackから通常どおり送信した状態でAnalysisを手動実行し、`field1=0`が記録され、メールが届かないことを確認します。次にM5Stackの電源を切るかThingSpeak送信を停止し、最終entryから30分経過後にAnalysisを実行して、`field1=1`と停止通知を確認します。同じ状態でもう一度実行したときは通知されません。最後に送信を再開し、新しいentryが追加された後にAnalysisを実行して、`field1=0`と復旧通知を確認します。
 
-ThingSpeak Alertsには30分あたり2件までの送信制限があります。また、無料ユーザーはTimeControlを維持するため、少なくとも60日に一度ThingSpeakへログインする必要があります。この監視は補助機能であり、生命・安全に関わる唯一の監視経路として使用しないでください。
+当初はTimeControlから10分ごとにMATLAB Analysisを実行する構成を想定していました。しかし、RecurringとOne Timeの両方で予定時刻に実行されず、One Timeが約3時間遅れて実行される挙動を確認したため、ThingSpeak公式のチャネル無通信監視例に沿ったReact構成へ変更しました。不要になったTimeControlは、遅延実行や監視チャネルへの重複書き込みを避けるため削除してください。
+
+ThingSpeak Alertsには30分あたり2件までの送信制限があります。この監視は補助機能であり、生命・安全に関わる唯一の監視経路として使用しないでください。
 
 起動時にWi-Fiへ接続した後、NTPサーバーから時刻を取得します。時刻は日本標準時（JST）で液晶とシリアルモニターに表示されます。液晶のデフォルト表示形式は `yyyy.mm.dd. ddd hh:mm` で、設定モードから秒表示へ切り替えられます。
 

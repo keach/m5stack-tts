@@ -33,18 +33,20 @@ else
         'Fields', 1, 'NumPoints', 1, 'ReadKey', sourceReadKey);
 end
 
-nowUtc = datetime('now', 'TimeZone', 'UTC');
+% ThingSpeak returns both datetime('now') and thingSpeakRead timestamps in
+% the account time zone. Keep both values in that same zone when calculating
+% elapsed time; assigning UTC here would reinterpret an unzoned timestamp.
+currentTime = datetime('now');
 if isempty(sourceTimestamps)
     ageMinutes = -1;
     currentState = 1;
     latestReceivedText = 'No entries have been received.';
 else
     latestReceived = sourceTimestamps(end);
-    latestReceived.TimeZone = 'UTC';
-    ageMinutes = max(0, minutes(nowUtc - latestReceived));
+    ageMinutes = max(0, minutes(currentTime - latestReceived));
     currentState = double(ageMinutes >= staleAfterMinutes);
     latestReceived.Format = 'yyyy-MM-dd HH:mm:ss';
-    latestReceivedText = sprintf('Latest entry: %s UTC (%.1f minutes ago).', ...
+    latestReceivedText = sprintf('Latest entry: %s account time (%.1f minutes ago).', ...
         char(latestReceived), ageMinutes);
 end
 

@@ -17,6 +17,7 @@
 #include "SdCardLock.h"
 #include "SettingsMode.h"
 #include "FirmwareInfo.h"
+#include "JapaneseFont.h"
 #include "SpeechService.h"
 #include "SpeechNumberFormatter.h"
 #include "TemperatureAlertService.h"
@@ -67,6 +68,7 @@ struct WeatherData {
 struct ForecastEntry {
   time_t forecastAt = 0;
   char condition[24] = "--";
+  int conditionId = 0;
   int cloudiness = -1;
   float temperature = 0;
   uint8_t precipitationProbability = 0;
@@ -139,6 +141,7 @@ AppSettings appSettings;
 SettingsMode settingsMode;
 SpeechService speech;
 bool speechAvailable = false;
+JapaneseFont japaneseFont;
 bool automaticForecastSpeechActive = false;
 bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
@@ -213,6 +216,26 @@ const char* weatherConditionForDisplay(const char* condition, int cloudiness) {
   return strcmp(condition, "Clouds") == 0
              ? cloudinessForDisplay(cloudiness)
              : condition;
+}
+
+const char* weatherConditionInJapaneseForDisplay(int conditionId) {
+  if (conditionId >= 200 && conditionId <= 299) return "雷雨";
+  if (conditionId >= 300 && conditionId <= 399) return "霧雨";
+  if (conditionId >= 500 && conditionId <= 599) return "雨";
+  if (conditionId >= 600 && conditionId <= 699) return "雪";
+  if (conditionId == 701 || conditionId == 741) return "霧";
+  if (conditionId == 711) return "煙";
+  if (conditionId == 721) return "かすみ";
+  if (conditionId == 731 || conditionId == 751 || conditionId == 761) {
+    return "砂塵";
+  }
+  if (conditionId == 762) return "降灰";
+  if (conditionId == 771) return "強風";
+  if (conditionId == 781) return "竜巻";
+  if (conditionId == 800) return "晴れ";
+  if (conditionId == 801) return "薄曇り";
+  if (conditionId >= 802 && conditionId <= 804) return "曇り";
+  return "不明";
 }
 
 bool showSplashScreen() {
@@ -495,7 +518,25 @@ void drawWeather() {
         TFT_BLACK);
   }
   M5.Lcd.setCursor(16, 44);
-  if (temperatureAlert >= 40) {
+  const bool japanese = japaneseFont.loaded();
+  if (japanese && temperatureAlert >= 40) {
+    japaneseFont.drawLine(40, "危険な暑さ: 40 ℃", TFT_WHITE, TFT_RED);
+  } else if (japanese && temperatureAlert >= 35) {
+    japaneseFont.drawLine(40, "高温警戒: 35 ℃", TFT_RED, TFT_BLACK);
+  } else if (japanese && temperatureAlert >= 30) {
+    japaneseFont.drawLine(40, "高温注意: 30 ℃", TFT_ORANGE, TFT_BLACK);
+  } else if (japanese && weather.valid && rainAlerts.isRainActive()) {
+    char line[64];
+    snprintf(line, sizeof(line), "降雨注意: %.1f mm", weather.rainLastHour);
+    japaneseFont.drawLine(40, line, TFT_CYAN, TFT_BLACK);
+  } else if (japanese && rainForecastAlerts.isActive()) {
+    char line[64];
+    snprintf(line, sizeof(line), "降雨予報: %u %%",
+             rainForecastAlerts.probabilityPercent());
+    japaneseFont.drawLine(40, line, TFT_CYAN, TFT_BLACK);
+  } else if (japanese) {
+    japaneseFont.drawLine(40, "現在の天気", TFT_CYAN, TFT_BLACK);
+  } else if (temperatureAlert >= 40) {
     M5.Lcd.print("EXTREME HEAT: 40 C");
   } else if (temperatureAlert >= 35) {
     M5.Lcd.print("HIGH TEMP WARNING: 35 C");
@@ -512,26 +553,45 @@ void drawWeather() {
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
   if (!weather.valid) {
-    M5.Lcd.setCursor(16, 86);
-    M5.Lcd.println("Weather unavailable");
+    if (japanese) {
+      japaneseFont.drawLine(82, "天気情報なし", TFT_WHITE, TFT_BLACK);
+    } else {
+      M5.Lcd.setCursor(16, 86);
+      M5.Lcd.println("Weather unavailable");
+    }
     M5.Lcd.setCursor(16, 214);
     M5.Lcd.setTextSize(1);
     M5.Lcd.println("A:refresh B:speak/stop C:forecast");
     return;
   }
 
-  M5.Lcd.setCursor(16, 76);
-  M5.Lcd.printf("Weather : %s",
-                weatherConditionForDisplay(weather.condition,
-                                           weather.cloudiness));
-  M5.Lcd.setCursor(16, 104);
-  M5.Lcd.printf("Temp    : %.1f C", weather.temperature);
-  M5.Lcd.setCursor(16, 132);
-  M5.Lcd.printf("Humidity: %d %%", weather.humidity);
-  M5.Lcd.setCursor(16, 160);
-  M5.Lcd.printf("Pressure: %d hPa", weather.pressure);
-  M5.Lcd.setCursor(16, 188);
-  M5.Lcd.printf("Rain 1h : %.1f mm", weather.rainLastHour);
+  if (japanese) {
+    char line[64];
+    snprintf(line, sizeof(line), "天気    : %s",
+             weatherConditionInJapaneseForDisplay(weather.conditionId));
+    japaneseFont.drawLine(72, line, TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "気温    : %.1f ℃", weather.temperature);
+    japaneseFont.drawLine(99, line, TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "湿度    : %d %%", weather.humidity);
+    japaneseFont.drawLine(126, line, TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "気圧    : %d hPa", weather.pressure);
+    japaneseFont.drawLine(153, line, TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "1時間雨量: %.1f mm", weather.rainLastHour);
+    japaneseFont.drawLine(180, line, TFT_WHITE, TFT_BLACK);
+  } else {
+    M5.Lcd.setCursor(16, 76);
+    M5.Lcd.printf("Weather : %s",
+                  weatherConditionForDisplay(weather.condition,
+                                             weather.cloudiness));
+    M5.Lcd.setCursor(16, 104);
+    M5.Lcd.printf("Temp    : %.1f C", weather.temperature);
+    M5.Lcd.setCursor(16, 132);
+    M5.Lcd.printf("Humidity: %d %%", weather.humidity);
+    M5.Lcd.setCursor(16, 160);
+    M5.Lcd.printf("Pressure: %d hPa", weather.pressure);
+    M5.Lcd.setCursor(16, 188);
+    M5.Lcd.printf("Rain 1h : %.1f mm", weather.rainLastHour);
+  }
 
   M5.Lcd.setTextSize(1);
   char observedText[20] = "unavailable";
@@ -624,12 +684,24 @@ void drawForecast() {
                           : TFT_CYAN,
                       TFT_BLACK);
   M5.Lcd.setCursor(16, 40);
+  const bool japanese = japaneseFont.loaded();
   if (rainForecastAlerts.isActive() &&
       forecastRequestStatus != ForecastRequestStatus::Loading) {
-    M5.Lcd.printf("RAIN FORECAST: %u %%",
-                  rainForecastAlerts.probabilityPercent());
+    if (japanese) {
+      char line[64];
+      snprintf(line, sizeof(line), "降雨予報: %u %%",
+               rainForecastAlerts.probabilityPercent());
+      japaneseFont.drawLine(36, line, TFT_CYAN, TFT_BLACK);
+    } else {
+      M5.Lcd.printf("RAIN FORECAST: %u %%",
+                    rainForecastAlerts.probabilityPercent());
+    }
   } else {
-    M5.Lcd.print("WEATHER FORECAST");
+    if (japanese) {
+      japaneseFont.drawLine(36, "天気予報", TFT_CYAN, TFT_BLACK);
+    } else {
+      M5.Lcd.print("WEATHER FORECAST");
+    }
   }
 
   M5.Lcd.setTextSize(1);
@@ -646,9 +718,19 @@ void drawForecast() {
                             : TFT_WHITE,
                         TFT_BLACK);
     M5.Lcd.setCursor(16, 104);
-    M5.Lcd.print(forecastRequestStatus == ForecastRequestStatus::Failed
-                     ? "Forecast failed"
-                     : "Forecast unavailable");
+    if (japanese) {
+      japaneseFont.drawLine(
+          100, forecastRequestStatus == ForecastRequestStatus::Failed
+                   ? "予報取得失敗"
+                   : "予報情報なし",
+          forecastRequestStatus == ForecastRequestStatus::Failed ? TFT_RED
+                                                                 : TFT_WHITE,
+          TFT_BLACK);
+    } else {
+      M5.Lcd.print(forecastRequestStatus == ForecastRequestStatus::Failed
+                       ? "Forecast failed"
+                       : "Forecast unavailable");
+    }
   } else {
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -657,15 +739,32 @@ void drawForecast() {
       tm forecastTime = {};
       localtime_r(&entry.forecastAt, &forecastTime);
       const int y = 60 + static_cast<int>(index) * 39;
-      M5.Lcd.setCursor(16, y);
-      M5.Lcd.printf("%02d/%02d %02d:%02d %s", forecastTime.tm_mon + 1,
-                    forecastTime.tm_mday, forecastTime.tm_hour,
-                    forecastTime.tm_min,
-                    weatherConditionForDisplay(entry.condition,
-                                               entry.cloudiness));
-      M5.Lcd.setCursor(28, y + 17);
-      M5.Lcd.printf("%.1f C/%u %%/%.1f mm", entry.temperature,
-                    entry.precipitationProbability, entry.rainThreeHours);
+      if (japanese) {
+        char line[64];
+        snprintf(line, sizeof(line), "%02d/%02d %02d:%02d %s",
+                 forecastTime.tm_mon + 1, forecastTime.tm_mday,
+                 forecastTime.tm_hour, forecastTime.tm_min,
+                 weatherConditionInJapaneseForDisplay(entry.conditionId));
+        japaneseFont.drawLine(y - 3, line, TFT_WHITE, TFT_BLACK);
+      } else {
+        M5.Lcd.setCursor(16, y);
+        M5.Lcd.printf("%02d/%02d %02d:%02d %s", forecastTime.tm_mon + 1,
+                      forecastTime.tm_mday, forecastTime.tm_hour,
+                      forecastTime.tm_min,
+                      weatherConditionForDisplay(entry.condition,
+                                                 entry.cloudiness));
+      }
+      if (japanese) {
+        char line[64];
+        snprintf(line, sizeof(line), "%.1f ℃/%u %%/%.1f mm",
+                 entry.temperature, entry.precipitationProbability,
+                 entry.rainThreeHours);
+        japaneseFont.drawLine(y + 17, line, TFT_WHITE, TFT_BLACK, 28);
+      } else {
+        M5.Lcd.setCursor(28, y + 17);
+        M5.Lcd.printf("%.1f C/%u %%/%.1f mm", entry.temperature,
+                      entry.precipitationProbability, entry.rainThreeHours);
+      }
     }
   }
 
@@ -1066,6 +1165,7 @@ bool fetchForecast() {
     filter["list"][index]["dt"] = true;
     filter["list"][index]["main"]["temp"] = true;
     filter["list"][index]["weather"][0]["main"] = true;
+    filter["list"][index]["weather"][0]["id"] = true;
     filter["list"][index]["clouds"]["all"] = true;
     filter["list"][index]["pop"] = true;
     filter["list"][index]["rain"]["3h"] = true;
@@ -1097,6 +1197,7 @@ bool fetchForecast() {
     entry.forecastAt = forecastAt;
     strlcpy(entry.condition, source["weather"][0]["main"] | "Unknown",
             sizeof(entry.condition));
+    entry.conditionId = source["weather"][0]["id"] | 0;
     entry.cloudiness =
         source["clouds"]["all"].is<int>() ? source["clouds"]["all"].as<int>()
                                            : -1;
@@ -1258,12 +1359,15 @@ void setup() {
   updateWeather(WeatherRequestSource::Startup, !settingsRequested);
   displayDrawingSuppressed = false;
 
+  japaneseFont.begin(storageAvailable);
+
   if (settingsRequested) {
     tm diagnosticTime = {};
     const DiagnosticStatus diagnostics = {
         storageAvailable,
         storageAvailable && SD.exists("/aq_dic/aqdic_m.bin"),
         speechAvailable,
+        japaneseFont.loaded(),
         WiFi.status() == WL_CONNECTED,
         getLocalTime(&diagnosticTime, 10),
         weather.valid,

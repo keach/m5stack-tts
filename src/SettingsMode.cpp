@@ -303,17 +303,18 @@ void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics) {
   M5.Lcd.setCursor(88, 8);
   M5.Lcd.print("DIAGNOSTICS");
 
-  const char* labels[] = {"microSD", "Dictionary", "Speech",
-                          "Wi-Fi",  "NTP time",   "Weather"};
+  const char* labels[] = {"microSD", "Dictionary", "Speech", "JP font",
+                          "Wi-Fi", "NTP time", "Weather"};
   const bool values[] = {
       diagnostics.storageAvailable,    diagnostics.dictionaryAvailable,
-      diagnostics.speechAvailable,     diagnostics.wifiConnected,
+      diagnostics.speechAvailable,     diagnostics.japaneseFontAvailable,
+      diagnostics.wifiConnected,
       diagnostics.timeSynchronized,    diagnostics.weatherAvailable,
   };
 
   M5.Lcd.setTextSize(2);
-  for (int index = 0; index < 6; ++index) {
-    const int y = 45 + index * 27;
+  for (int index = 0; index < 7; ++index) {
+    const int y = 40 + index * 24;
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
     M5.Lcd.setCursor(24, y);
     M5.Lcd.printf("%-12s", labels[index]);

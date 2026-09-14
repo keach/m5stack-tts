@@ -13,6 +13,7 @@ struct DiagnosticStatus {
   bool wifiConnected;
   bool timeSynchronized;
   bool weatherAvailable;
+  bool japaneseFontAvailable;
   IPAddress ipAddress;
 };
 

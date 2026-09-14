@@ -12,3 +12,5 @@ sdcard/aq_dic/aqdic_m.bin
 .vscode/ipch/
 .vscode/extensions.json
 tmp/
+support/.font-cache/
+__pycache__/

@@ -10,8 +10,10 @@
 #include <time.h>
 
 #include "secrets.h"
+#include "earthquake_config.h"
 #include "AmbientPublisher.h"
 #include "AppSettings.h"
+#include "EarthquakeService.h"
 #include "RainAlertService.h"
 #include "RainForecastAlertService.h"
 #include "SdCardLock.h"
@@ -147,6 +149,7 @@ bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
+EarthquakeService earthquakeService;
 
 struct UpdateNotificationPlan {
   bool higherPriorityTriggered = false;
@@ -787,8 +790,90 @@ void drawForecast() {
   M5.Lcd.print("A:refresh B:speak/stop C:back");
 }
 
+const char* seismicScaleForDisplay(int scale) {
+  switch (scale) {
+    case 0: return "0";
+    case 10: return "1";
+    case 20: return "2";
+    case 30: return "3";
+    case 40: return "4";
+    case 45: return "5弱";
+    case 50: return "5強";
+    case 55: return "6弱";
+    case 60: return "6強";
+    case 70: return "7";
+    case 99: return "5弱以上";
+    default: return "不明";
+  }
+}
+
+void drawSeismicEvent() {
+  if (displaySleeping || !earthquakeService.active()) return;
+  const SeismicEvent& event = earthquakeService.current();
+  M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
+  const bool japanese = japaneseFont.loaded();
+  const uint16_t headingColor =
+      event.test ? TFT_YELLOW
+                 : event.type == SeismicEventType::Eew ? TFT_RED : TFT_ORANGE;
+  char line[112];
+
+  if (event.type == SeismicEventType::Eew) {
+    snprintf(line, sizeof(line), "%s緊急地震速報 第%d報",
+             event.test ? "【試験】" : "", event.serial);
+  } else {
+    snprintf(line, sizeof(line), "%s地震情報", event.test ? "【試験】" : "");
+  }
+  if (japanese) {
+    japaneseFont.drawLineEllipsized(39, line, headingColor, TFT_BLACK);
+  } else {
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(headingColor, TFT_BLACK);
+    M5.Lcd.setCursor(12, 42);
+    M5.Lcd.print(event.type == SeismicEventType::Eew ? "EARTHQUAKE WARNING"
+                                                     : "EARTHQUAKE INFO");
+  }
+
+  if (event.cancelled) {
+    snprintf(line, sizeof(line), "この速報は取り消されました");
+  } else {
+    snprintf(line, sizeof(line), "対象: %s 最大震度%s", event.targetAreas,
+             seismicScaleForDisplay(event.maxScale));
+  }
+  if (japanese) {
+    japaneseFont.drawLineEllipsized(
+        77, line, event.cancelled ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "震源: %s", event.hypocenter);
+    japaneseFont.drawLineEllipsized(108, line, TFT_WHITE, TFT_BLACK);
+    if (event.magnitude >= 0) {
+      snprintf(line, sizeof(line), "M %.1f  %s %s", event.magnitude,
+               event.type == SeismicEventType::Eew ? "発表" : "発生",
+               event.eventTime);
+    } else {
+      snprintf(line, sizeof(line), "%s %s",
+               event.type == SeismicEventType::Eew ? "発表" : "発生",
+               event.eventTime);
+    }
+    japaneseFont.drawLineEllipsized(139, line, TFT_WHITE, TFT_BLACK);
+  } else {
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(event.cancelled ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
+    M5.Lcd.setCursor(12, 82);
+    M5.Lcd.printf("Scale: %s", seismicScaleForDisplay(event.maxScale));
+    M5.Lcd.setCursor(12, 112);
+    M5.Lcd.printf("M %.1f  %s", event.magnitude, event.eventTime);
+  }
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(12, 218);
+  M5.Lcd.print("P2PQuake realtime information");
+}
+
 void drawMainScreen() {
   if (displaySleeping || displayDrawingSuppressed) {
+    return;
+  }
+  if (earthquakeService.active()) {
+    drawSeismicEvent();
     return;
   }
   if (mainScreen == MainScreen::Forecast) {
@@ -975,6 +1060,9 @@ uint32_t localDateKey(const tm& localTime) {
 }
 
 void runScheduledForecastSpeech() {
+  if (earthquakeService.active()) {
+    return;
+  }
   tm localTime = {};
   if (!getLocalTime(&localTime, 10)) {
     return;
@@ -1252,6 +1340,14 @@ bool fetchForecast() {
 }
 
 void applyNotificationPlan() {
+  if (earthquakeService.active()) {
+    if (notificationPlan.higherPriorityTriggered ||
+        notificationPlan.rainForecastTriggered) {
+      Serial.println(
+          "Weather notification audio suppressed by seismic information.");
+    }
+    return;
+  }
   if (notificationPlan.higherPriorityTriggered) {
     mainScreen = MainScreen::CurrentWeather;
   } else if (notificationPlan.rainForecastTriggered) {
@@ -1355,6 +1451,12 @@ void setup() {
   webDownloadServer.begin(storageAvailable);
   syncTimeWithNtp();
 
+  earthquakeService.begin(
+      EARTHQUAKE_TARGET_PREFECTURES,
+      sizeof(EARTHQUAKE_TARGET_PREFECTURES) /
+          sizeof(EARTHQUAKE_TARGET_PREFECTURES[0]),
+      EARTHQUAKE_USE_SANDBOX);
+
   displayDrawingSuppressed = true;
   updateWeather(WeatherRequestSource::Startup, !settingsRequested);
   displayDrawingSuppressed = false;
@@ -1390,12 +1492,28 @@ void setup() {
 
 void loop() {
   M5.update();
+  earthquakeService.loop();
   webDownloadServer.handleClient();
   thingSpeakPublisher.handle();
   processWeatherLogRetry();
   temperatureAlerts.processPendingLogs();
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
+
+  if (earthquakeService.consumeWakeRequested()) {
+    wakeDisplay(DisplayWakeReason::Notification);
+  }
+  if (earthquakeService.consumeWarningRequested()) {
+    if (speechAvailable) {
+      speech.playAlertTone(180, 3);
+    } else {
+      Serial.println("EEW warning tone skipped because audio is unavailable.");
+    }
+  }
+  if (earthquakeService.consumeDisplayChanged()) {
+    drawDateTime();
+    drawMainScreen();
+  }
 
   if (displaySleeping) {
     const bool wakeButtonPressed =
@@ -1423,7 +1541,14 @@ void loop() {
 
   runScheduledForecastSpeech();
 
-  if (!displaySleeping && M5.BtnA.wasPressed()) {
+  const bool seismicDisplayActive = earthquakeService.active();
+  if (seismicDisplayActive &&
+      (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed())) {
+    noteDisplayActivity();
+    buttonAConfirmationPending = false;
+    Serial.println("Button press ignored while seismic information is shown.");
+  }
+  if (!displaySleeping && !seismicDisplayActive && M5.BtnA.wasPressed()) {
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
     Serial.printf("Button A signal detected (raw pin: %d).\n",
@@ -1445,14 +1570,15 @@ void loop() {
   }
   if (scheduledForecastStopButtonConsumed) {
     scheduledForecastStopButtonConsumed = false;
-  } else if (!displaySleeping && M5.BtnB.wasPressed()) {
+  } else if (!displaySleeping && !seismicDisplayActive &&
+             M5.BtnB.wasPressed()) {
     noteDisplayActivity();
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }
     toggleScreenSpeech();
   }
-  if (!displaySleeping && M5.BtnC.wasPressed()) {
+  if (!displaySleeping && !seismicDisplayActive && M5.BtnC.wasPressed()) {
     noteDisplayActivity();
     mainScreen = mainScreen == MainScreen::CurrentWeather
                      ? MainScreen::Forecast

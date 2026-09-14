@@ -81,6 +81,7 @@ const char* scaleText(int scale) {
     case 30: return "3";
     case 40: return "4";
     case 45: return "5弱";
+    case 46: return "5弱以上";
     case 50: return "5強";
     case 55: return "6弱";
     case 60: return "6強";
@@ -380,7 +381,8 @@ void EarthquakeService::processEew(JsonDocument& document) {
     }
   }
   updated.targetMatched = matchedCount > 0;
-  if (matchedCount == 0 && strcmp(eew_.eventId, eventId) == 0) {
+  if (updated.cancelled && areas.size() == 0 &&
+      strcmp(eew_.eventId, eventId) == 0) {
     updated.targetMatched = eew_.targetMatched;
     copyText(updated.targetAreas, sizeof(updated.targetAreas),
              eew_.targetAreas);

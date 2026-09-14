@@ -798,6 +798,7 @@ const char* seismicScaleForDisplay(int scale) {
     case 30: return "3";
     case 40: return "4";
     case 45: return "5弱";
+    case 46: return "5弱以上";
     case 50: return "5強";
     case 55: return "6弱";
     case 60: return "6強";

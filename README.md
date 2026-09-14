@@ -14,6 +14,7 @@ M5Stack Basic（ESP32）向けのPlatformIOプロジェクトです。
 - 起動時のNTP時刻同期と日本標準時（JST）の表示
 - OpenWeatherからの現在の天気、気温、湿度、気圧、直近1時間雨量の取得と画面表示
 - OpenWeatherの5 day / 3 hour forecast APIから直近4件（約12時間分）の予報を取得・表示
+- microSD上のNoto Sans CJK JP Smooth Fontを使った通常画面・予報画面・アラート表示の日本語化
 - 現在天気・予報の `Clouds` を雲量に応じた5段階の表示・読み上げへ細分化
 - 起動時・10分ごとの自動更新と、ボタンAによる手動更新
 - microSDカードの初期化と、天気情報の `/weather.csv` への記録
@@ -35,7 +36,7 @@ M5Stack Basic（ESP32）向けのPlatformIOプロジェクトです。
 依存関係を含む概ねの実装順は次のとおりです。
 
 - 設定・診断画面: 画面スリープ設定（#23）とバージョン表示（#29）→ ページネーション（#30）→ 定時読み上げ時刻の「時」「分」個別設定（#31）
-- 日本語表示・防災情報: 通常画面・予報画面・アラートの日本語化（#33）→ 地震速報・地震情報の画面表示（#36）→ 読み上げ（#37）
+- 日本語表示・防災情報: 地震速報・地震情報の画面表示（#36）→ 読み上げ（#37）
 - テレメトリ: ThingSpeak送信失敗時のキュー登録・再送（#35）→ ThingSpeak上での送信停止監視（#48）
 - 将来検証: ThingSpeakの安定運用後、InfluxDB＋Grafanaによるセルフホスト監視基盤を検証（#28）
 
@@ -271,6 +272,46 @@ datetime,weather,temp_c,humidity_pct,pressure_hpa,rain_1h_mm
 
 SDカードがない場合や初期化に失敗した場合も、時計と天気表示は継続します。
 
+### 日本語表示フォント
+
+通常画面、予報画面、高温・降雨・降雨予報アラートでは、microSDカードの
+`/Japanese16.vlw`をTFT_eSPI Smooth Fontとして読み込みます。`sdcard`
+ディレクトリの内容をmicroSDカードのルートへコピーしてください。
+
+```text
+/Japanese16.vlw
+/aq_dic/aqdic_m.bin
+```
+
+フォントがない、またはmicroSDを認識できない場合も起動を継続し、対象画面を
+従来の英語で表示します。フォントの認識結果は起動時のシリアルログと診断画面の
+`JP font`で確認できます。設定・診断画面、スプラッシュ画面、ボタン操作説明、
+送信状態、API取得日時は英語表示のままです。
+
+日本語フォントはNoto Sans CJK JP Regular 16pxを元に、ASCII、日本語の句読点、
+ひらがな、カタカナ、全角形、摂氏記号、JIS X 0208第一水準漢字2,965字を収録して
+います。元フォントはSIL Open Font License 1.1で提供され、ライセンス全文は
+`src/fonts/NOTO-SANS-JP-LICENSE.txt`に収録しています。
+
+生成元のリビジョンとSHA-256は`support/GenerateJapaneseFont.java`で固定して
+います。Java 17以降を使い、次のコマンドで同じ`.vlw`を再生成できます。初回は
+固定したNoto Sans CJK JPをダウンロードします。
+
+```sh
+java support/GenerateJapaneseFont.java
+```
+
+すでに元フォントを取得している場合は、次のように指定できます。固定した
+SHA-256と一致しないファイルは使用しません。
+
+```sh
+java support/GenerateJapaneseFont.java --font /path/to/NotoSansCJKjp-Regular.otf
+```
+
+現在の生成物は3,417グリフ、896,219 bytesです。Smooth Fontは描画時に
+microSDを参照し、グリフ管理情報として約41KBのHeapを使用する見込みです。
+実機での読み込み時間と実際のHeap使用量は起動ログへ出力します。
+
 ## AquesTalk ESP32 SDK
 
 AquesTalk ESP32 Small辞書版2.4.4の評価版SDKは、再配布条件に従ってGit管理対象外の `vendor/aquestalk/aquestalk-esp32_s` に配置します。PlatformIOはこのローカルSDKを `lib_extra_dirs` から読み込みます。
@@ -313,7 +354,7 @@ constexpr char AQUESTALK_LICENSE_KEY[] = "";
 
 指定時刻に電源が入っていない、NTP時刻が未同期、予報未取得、または音声サービスが利用できない場合は、その回を静かにスキップし、後追いでは再生しません。自動読み上げは他の発話より優先され、開始時に再生中の音声を停止します。読み上げ中はAPI更新と高温・降雨通知を開始せず、ボタンBで停止できます。読み上げ終了後は通常処理へ戻り、保留されていた定期更新条件を次のループで評価します。
 
-診断画面では、microSD、AquesTalk辞書、音声サービス、Wi-Fi、NTP時刻、OpenWeather取得状態を確認できます。
+診断画面では、microSD、AquesTalk辞書、音声サービス、日本語フォント、Wi-Fi、NTP時刻、OpenWeather取得状態を確認できます。
 
 ## 高温アラート
 

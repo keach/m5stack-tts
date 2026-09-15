@@ -4,6 +4,7 @@
 #include <SD.h>
 
 #include "SdCardLock.h"
+#include "RuntimeDiagnostics.h"
 
 namespace {
 constexpr char FONT_NAME[] = "Japanese16";
@@ -128,6 +129,36 @@ bool JapaneseFont::loadGlyphCodes() {
   return true;
 }
 
+bool JapaneseFont::suspendForNetworkRequest() {
+  if (!loaded_ || suspended_) return false;
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) {
+    Serial.println("Japanese font suspend skipped because the SD card is busy.");
+    return false;
+  }
+  lineSprite_.unloadFont();
+  loaded_ = false;
+  suspended_ = true;
+  Serial.println("Japanese font suspended for HTTPS requests.");
+  logRuntimeMemory("Japanese font suspended");
+  return true;
+}
+
+bool JapaneseFont::resumeAfterNetworkRequest() {
+  if (!suspended_) return loaded_;
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) {
+    Serial.println("Japanese font reload deferred because the SD card is busy.");
+    return false;
+  }
+  lineSprite_.loadFont(FONT_NAME, SD);
+  loaded_ = true;
+  suspended_ = false;
+  Serial.println("Japanese font reloaded after HTTPS requests.");
+  logRuntimeMemory("Japanese font reloaded");
+  return true;
+}
+
 bool JapaneseFont::hasGlyph(uint32_t codePoint) const {
   if (codePoint < 0x80) return true;
   for (uint32_t index = 0; index < glyphCount_; ++index) {
@@ -174,6 +205,11 @@ void JapaneseFont::drawLine(int16_t y, const char* text,
                             uint16_t foreground, uint16_t background,
                             int16_t x) {
   if (!loaded_ || !text) return;
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) {
+    Serial.println("Japanese font draw skipped because the SD card is busy.");
+    return;
+  }
   const uint32_t startedAt = millis();
   lineSprite_.fillSprite(background);
   lineSprite_.setTextColor(foreground, background);

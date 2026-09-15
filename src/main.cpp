@@ -1145,54 +1145,58 @@ bool fetchCurrentWeather() {
   const String url = buildOpenWeatherUrl(WEATHER_API_URL, "en");
 
   logRuntimeMemory("current weather before TLS");
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.setTimeout(10000);
-  if (!http.begin(client, url)) {
-    Serial.println("Failed to initialize the weather request.");
-    logRuntimeMemory("current weather begin failed");
-    return false;
-  }
-
-  Serial.println("Requesting current weather...");
-  const int statusCode = http.GET();
-  logRuntimeMemory("current weather after GET");
-  if (statusCode != HTTP_CODE_OK) {
-    if (statusCode < 0) {
-      Serial.printf("Weather API request failed: %d (%s).\n", statusCode,
-                    HTTPClient::errorToString(statusCode).c_str());
-    } else {
-      Serial.printf("Weather API returned HTTP %d.\n", statusCode);
+  {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setTimeout(10000);
+    if (!http.begin(client, url)) {
+      Serial.println("Failed to initialize the weather request.");
+      logRuntimeMemory("current weather begin failed");
+      return false;
     }
-    http.end();
-    logRuntimeMemory("current weather failed after end");
-    return false;
-  }
 
-  JsonDocument document;
-  const DeserializationError error = deserializeJson(document, http.getStream());
-  if (error) {
-    Serial.printf("Weather JSON parsing failed: %s\n", error.c_str());
-    http.end();
-    logRuntimeMemory("current weather parse failed after end");
-    return false;
-  }
+    Serial.println("Requesting current weather...");
+    const int statusCode = http.GET();
+    logRuntimeMemory("current weather after GET");
+    if (statusCode != HTTP_CODE_OK) {
+      if (statusCode < 0) {
+        Serial.printf("Weather API request failed: %d (%s).\n", statusCode,
+                      HTTPClient::errorToString(statusCode).c_str());
+      } else {
+        Serial.printf("Weather API returned HTTP %d.\n", statusCode);
+      }
+      http.end();
+      logRuntimeMemory("current weather failed after end");
+      return false;
+    }
 
-  strlcpy(weather.condition, document["weather"][0]["main"] | "Unknown",
-          sizeof(weather.condition));
-  weather.conditionId = document["weather"][0]["id"] | 0;
-  weather.cloudiness =
-      document["clouds"]["all"].is<int>() ? document["clouds"]["all"].as<int>()
-                                           : -1;
-  weather.temperature = document["main"]["temp"] | 0.0F;
-  weather.humidity = document["main"]["humidity"] | 0;
-  weather.pressure = document["main"]["pressure"] | 0;
-  weather.rainLastHour = document["rain"]["1h"] | 0.0F;
-  weather.observedAt = time(nullptr);
-  weather.valid = true;
-  http.end();
-  logRuntimeMemory("current weather after end");
+    JsonDocument document;
+    const DeserializationError error =
+        deserializeJson(document, http.getStream());
+    if (error) {
+      Serial.printf("Weather JSON parsing failed: %s\n", error.c_str());
+      http.end();
+      logRuntimeMemory("current weather parse failed after end");
+      return false;
+    }
+
+    strlcpy(weather.condition, document["weather"][0]["main"] | "Unknown",
+            sizeof(weather.condition));
+    weather.conditionId = document["weather"][0]["id"] | 0;
+    weather.cloudiness = document["clouds"]["all"].is<int>()
+                             ? document["clouds"]["all"].as<int>()
+                             : -1;
+    weather.temperature = document["main"]["temp"] | 0.0F;
+    weather.humidity = document["main"]["humidity"] | 0;
+    weather.pressure = document["main"]["pressure"] | 0;
+    weather.rainLastHour = document["rain"]["1h"] | 0.0F;
+    weather.observedAt = time(nullptr);
+    weather.valid = true;
+    http.end();
+    logRuntimeMemory("current weather after end");
+  }
+  logRuntimeMemory("current weather TLS released");
 
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
@@ -1425,6 +1429,11 @@ bool updateWeather(WeatherRequestSource source,
     return false;
   }
 
+  const bool earthquakeConnectionPaused =
+      earthquakeService.pauseForNetworkRequest();
+  const bool japaneseFontSuspended = japaneseFont.suspendForNetworkRequest();
+  const bool drawingWasSuppressed = displayDrawingSuppressed;
+  if (japaneseFontSuspended) displayDrawingSuppressed = true;
   notificationPlan.reset();
   const bool currentUpdated = fetchCurrentWeather();
   Serial.printf("Current weather request result: %s.\n",
@@ -1439,7 +1448,6 @@ bool updateWeather(WeatherRequestSource source,
     drawDateTime();
     drawMainScreen();
   }
-  applyNotificationPlan();
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
     logRuntimeMemory("before ThingSpeak publish");
@@ -1459,6 +1467,14 @@ bool updateWeather(WeatherRequestSource source,
         forecast.valid ? "yes" : "no",
         static_cast<unsigned>(forecast.count));
   }
+  if (earthquakeConnectionPaused) {
+    earthquakeService.resumeAfterNetworkRequest();
+  }
+  if (japaneseFontSuspended) {
+    japaneseFont.resumeAfterNetworkRequest();
+    displayDrawingSuppressed = drawingWasSuppressed;
+  }
+  applyNotificationPlan();
   logRuntimeMemory("weather update complete");
   drawMainScreen();
   return currentUpdated || forecastUpdated;

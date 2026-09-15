@@ -32,6 +32,8 @@ class EarthquakeService {
   void begin(const char* const* targetPrefectures, size_t targetCount,
              bool useSandbox);
   void loop();
+  bool pauseForNetworkRequest();
+  void resumeAfterNetworkRequest();
   bool active() const;
   const SeismicEvent& current() const;
   bool consumeDisplayChanged();
@@ -71,12 +73,14 @@ class EarthquakeService {
   bool useSandbox_ = false;
   bool connected_ = false;
   bool connecting_ = false;
+  bool paused_ = false;
   bool started_ = false;
   bool displayChanged_ = false;
   bool warningRequested_ = false;
   bool wakeRequested_ = false;
   uint8_t reconnectStep_ = 0;
   unsigned long reconnectAt_ = 0;
+  unsigned long connectStartedAt_ = 0;
   SeismicEventType selectedType_ = SeismicEventType::None;
   char lastEewEventId_[40] = {};
   char lastWarnedEewEventId_[40] = {};

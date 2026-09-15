@@ -14,6 +14,7 @@ constexpr uint16_t WEB_SOCKET_PORT = 443;
 constexpr unsigned long EEW_DISPLAY_MS = 2UL * 60UL * 1000UL;
 constexpr unsigned long EEW_CANCEL_DISPLAY_MS = 30UL * 1000UL;
 constexpr unsigned long EARTHQUAKE_DISPLAY_MS = 60UL * 1000UL;
+constexpr unsigned long CONNECT_TIMEOUT_MS = 15UL * 1000UL;
 constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr time_t MAX_EVENT_AGE_SECONDS = 5 * 60;
 constexpr unsigned long RECONNECT_DELAYS_MS[] = {1000, 2000, 5000, 10000,
@@ -209,6 +210,10 @@ void EarthquakeService::begin(const char* const* targetPrefectures,
 
 void EarthquakeService::loop() {
   if (!started_) return;
+  if (paused_) {
+    expireEvents();
+    return;
+  }
   if (WiFi.status() != WL_CONNECTED) {
     if (connected_) webSocket_.disconnect();
     connected_ = false;
@@ -221,12 +226,34 @@ void EarthquakeService::loop() {
     connect();
   }
   webSocket_.loop();
-  if (connecting_ && !connected_ && !webSocket_.isConnected()) {
+  if (connecting_ && !connected_ &&
+      millis() - connectStartedAt_ >= CONNECT_TIMEOUT_MS) {
+    Serial.println("P2PQuake WebSocket connection timed out.");
     connecting_ = false;
     webSocket_.setReconnectInterval(0xffffffffUL);
     scheduleReconnect();
   }
   expireEvents();
+}
+
+bool EarthquakeService::pauseForNetworkRequest() {
+  if (!started_ || paused_ || (!connected_ && !connecting_)) return false;
+  Serial.println("Pausing P2PQuake WebSocket for HTTPS requests.");
+  paused_ = true;
+  webSocket_.disconnect();
+  connected_ = false;
+  connecting_ = false;
+  logRuntimeMemory("P2PQuake paused");
+  return true;
+}
+
+void EarthquakeService::resumeAfterNetworkRequest() {
+  if (!started_ || !paused_) return;
+  paused_ = false;
+  reconnectStep_ = 0;
+  reconnectAt_ = millis();
+  Serial.println("P2PQuake WebSocket resume requested.");
+  logRuntimeMemory("P2PQuake resume requested");
 }
 
 bool EarthquakeService::active() const {
@@ -277,7 +304,7 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
       connected_ = false;
       connecting_ = false;
       webSocket_.setReconnectInterval(0xffffffffUL);
-      scheduleReconnect();
+      if (!paused_) scheduleReconnect();
       logRuntimeMemory("P2PQuake disconnected");
       break;
     case WStype_TEXT:
@@ -567,6 +594,7 @@ void EarthquakeService::connect() {
                 WEB_SOCKET_PATH);
   logRuntimeMemory("P2PQuake before beginSSL");
   connecting_ = true;
+  connectStartedAt_ = millis();
   webSocket_.beginSSL(host, WEB_SOCKET_PORT, WEB_SOCKET_PATH);
   webSocket_.setReconnectInterval(0);
   logRuntimeMemory("P2PQuake after beginSSL");

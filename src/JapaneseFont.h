@@ -5,6 +5,8 @@
 class JapaneseFont {
  public:
   bool begin(bool storageAvailable);
+  bool suspendForNetworkRequest();
+  bool resumeAfterNetworkRequest();
   bool available() const { return available_; }
   bool loaded() const { return loaded_; }
   size_t fileSize() const { return fileSize_; }
@@ -23,6 +25,7 @@ class JapaneseFont {
   uint32_t loadTimeMs_ = 0;
   TFT_eSprite lineSprite_{&M5.Lcd};
   bool drawTimeLogged_ = false;
+  bool suspended_ = false;
   uint16_t* glyphCodes_ = nullptr;
   uint32_t glyphCount_ = 0;
 

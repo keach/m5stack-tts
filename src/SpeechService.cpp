@@ -4,6 +4,7 @@
 #include <aquestalk.h>
 
 #include "driver/i2s.h"
+#include "SdCardLock.h"
 #include "secrets.h"
 
 namespace {
@@ -18,17 +19,23 @@ File dictionaryFile;
 }  // namespace
 
 extern "C" size_t aqdic_open() {
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) return 0;
   dictionaryFile = SD.open(DICTIONARY_PATH, FILE_READ);
   return dictionaryFile ? DICTIONARY_VIRTUAL_ADDRESS : 0;
 }
 
 extern "C" void aqdic_close() {
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) return;
   if (dictionaryFile) {
     dictionaryFile.close();
   }
 }
 
 extern "C" size_t aqdic_read(size_t position, size_t size, void* buffer) {
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) return 0;
   if (!dictionaryFile || position < DICTIONARY_VIRTUAL_ADDRESS) {
     return 0;
   }

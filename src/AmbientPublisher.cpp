@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 
 #include "ambient_secrets.h"
+#include "RuntimeDiagnostics.h"
 #include "SdCardLock.h"
 
 namespace {
@@ -57,20 +58,29 @@ AmbientPublishResult postPayload(JsonDocument& payload, const char* endpoint) {
   String url = String(AMBIENT_API_HOST) + "/api/v2/channels/" +
                String(AMBIENT_CHANNEL_ID) + endpoint;
 
+  logRuntimeMemory("Ambient before TLS");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(REQUEST_TIMEOUT_MS);
   if (!http.begin(client, url)) {
     Serial.println("Failed to initialize the Ambient request.");
+    logRuntimeMemory("Ambient begin failed");
     return AmbientPublishResult::RequestFailed;
   }
   http.addHeader("Content-Type", "application/json");
 
   const int statusCode = http.POST(body);
+  logRuntimeMemory("Ambient after POST");
   http.end();
+  logRuntimeMemory("Ambient after end");
   if (statusCode < 200 || statusCode >= 300) {
-    Serial.printf("Ambient API returned HTTP %d.\n", statusCode);
+    if (statusCode < 0) {
+      Serial.printf("Ambient API request failed: %d (%s).\n", statusCode,
+                    HTTPClient::errorToString(statusCode).c_str());
+    } else {
+      Serial.printf("Ambient API returned HTTP %d.\n", statusCode);
+    }
     return AmbientPublishResult::RequestFailed;
   }
   return AmbientPublishResult::Sent;

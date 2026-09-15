@@ -4,6 +4,7 @@
 #include <SD.h>
 
 #include "SdCardLock.h"
+#include "RuntimeDiagnostics.h"
 
 namespace {
 constexpr char FONT_NAME[] = "Japanese16";
@@ -75,9 +76,16 @@ bool JapaneseFont::begin(bool storageAvailable) {
   }
   const uint32_t heapBefore = ESP.getFreeHeap();
   const uint32_t startedAt = millis();
+  if (!loadGlyphCodes()) {
+    Serial.println("Japanese font glyph index allocation failed.");
+    return false;
+  }
   lineSprite_.setColorDepth(8);
   if (!lineSprite_.createSprite(320, LINE_HEIGHT)) {
     Serial.println("Japanese font line buffer allocation failed.");
+    free(glyphCodes_);
+    glyphCodes_ = nullptr;
+    glyphCount_ = 0;
     return false;
   }
   lineSprite_.loadFont(FONT_NAME, SD);
@@ -92,10 +100,116 @@ bool JapaneseFont::begin(bool storageAvailable) {
   return loaded_;
 }
 
+bool JapaneseFont::loadGlyphCodes() {
+  File file = SD.open(FONT_PATH, FILE_READ);
+  if (!file) return false;
+  const uint32_t count = readBigEndian32(file);
+  for (int field = 0; field < 5; ++field) readBigEndian32(file);
+  if (count == 0 || count > 5000) {
+    file.close();
+    return false;
+  }
+  glyphCodes_ = static_cast<uint16_t*>(malloc(count * sizeof(uint16_t)));
+  if (!glyphCodes_) {
+    file.close();
+    return false;
+  }
+  for (uint32_t index = 0; index < count; ++index) {
+    const uint32_t codePoint = readBigEndian32(file);
+    glyphCodes_[index] = static_cast<uint16_t>(codePoint);
+    if (!file.seek(file.position() + 24)) {
+      free(glyphCodes_);
+      glyphCodes_ = nullptr;
+      file.close();
+      return false;
+    }
+  }
+  glyphCount_ = count;
+  file.close();
+  return true;
+}
+
+bool JapaneseFont::suspendForNetworkRequest() {
+  if (!loaded_ || suspended_) return false;
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) {
+    Serial.println("Japanese font suspend skipped because the SD card is busy.");
+    return false;
+  }
+  lineSprite_.unloadFont();
+  loaded_ = false;
+  suspended_ = true;
+  Serial.println("Japanese font suspended for HTTPS requests.");
+  logRuntimeMemory("Japanese font suspended");
+  return true;
+}
+
+bool JapaneseFont::resumeAfterNetworkRequest() {
+  if (!suspended_) return loaded_;
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) {
+    Serial.println("Japanese font reload deferred because the SD card is busy.");
+    return false;
+  }
+  lineSprite_.loadFont(FONT_NAME, SD);
+  loaded_ = true;
+  suspended_ = false;
+  Serial.println("Japanese font reloaded after HTTPS requests.");
+  logRuntimeMemory("Japanese font reloaded");
+  return true;
+}
+
+bool JapaneseFont::hasGlyph(uint32_t codePoint) const {
+  if (codePoint < 0x80) return true;
+  for (uint32_t index = 0; index < glyphCount_; ++index) {
+    if (glyphCodes_[index] == codePoint) return true;
+  }
+  return false;
+}
+
+String JapaneseFont::sanitize(const char* text) const {
+  String result;
+  if (!text) return result;
+  const uint8_t* cursor = reinterpret_cast<const uint8_t*>(text);
+  while (*cursor) {
+    const uint8_t* start = cursor;
+    uint32_t codePoint = 0;
+    size_t length = 1;
+    if (*cursor < 0x80) {
+      codePoint = *cursor;
+    } else if ((*cursor & 0xe0) == 0xc0 && cursor[1]) {
+      codePoint = ((*cursor & 0x1f) << 6) | (cursor[1] & 0x3f);
+      length = 2;
+    } else if ((*cursor & 0xf0) == 0xe0 && cursor[1] && cursor[2]) {
+      codePoint = ((*cursor & 0x0f) << 12) | ((cursor[1] & 0x3f) << 6) |
+                  (cursor[2] & 0x3f);
+      length = 3;
+    } else if ((*cursor & 0xf8) == 0xf0 && cursor[1] && cursor[2] &&
+               cursor[3]) {
+      codePoint = 0x10000;
+      length = 4;
+    }
+    if (hasGlyph(codePoint)) {
+      for (size_t index = 0; index < length; ++index) {
+        result += static_cast<char>(start[index]);
+      }
+    } else {
+      result += "〓";
+    }
+    cursor += length;
+  }
+  return result;
+}
+
 void JapaneseFont::drawLine(int16_t y, const char* text,
                             uint16_t foreground, uint16_t background,
                             int16_t x) {
   if (!loaded_ || !text) return;
+  SdCardGuard guard(pdMS_TO_TICKS(1000));
+  if (!guard.locked()) {
+    Serial.println("Japanese font draw skipped because the SD card is busy.");
+    return;
+  }
   const uint32_t startedAt = millis();
   lineSprite_.fillSprite(background);
   lineSprite_.setTextColor(foreground, background);
@@ -107,4 +221,25 @@ void JapaneseFont::drawLine(int16_t y, const char* text,
                   static_cast<unsigned>(millis() - startedAt));
     drawTimeLogged_ = true;
   }
+}
+
+void JapaneseFont::drawLineEllipsized(int16_t y, const char* text,
+                                      uint16_t foreground,
+                                      uint16_t background, int16_t x) {
+  if (!loaded_ || !text) return;
+  String fitted = sanitize(text);
+  const int16_t availableWidth = max<int16_t>(0, 320 - x);
+  if (lineSprite_.textWidth(fitted) > availableWidth) {
+    while (!fitted.isEmpty() &&
+           lineSprite_.textWidth(fitted + "...") > availableWidth) {
+      int last = fitted.length() - 1;
+      while (last > 0 &&
+             (static_cast<uint8_t>(fitted[last]) & 0xc0) == 0x80) {
+        --last;
+      }
+      fitted.remove(last);
+    }
+    fitted += "...";
+  }
+  drawLine(y, fitted.c_str(), foreground, background, x);
 }

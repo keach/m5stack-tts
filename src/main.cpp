@@ -10,10 +10,13 @@
 #include <time.h>
 
 #include "secrets.h"
+#include "earthquake_config.h"
 #include "AmbientPublisher.h"
 #include "AppSettings.h"
+#include "EarthquakeService.h"
 #include "RainAlertService.h"
 #include "RainForecastAlertService.h"
+#include "RuntimeDiagnostics.h"
 #include "SdCardLock.h"
 #include "SettingsMode.h"
 #include "FirmwareInfo.h"
@@ -52,6 +55,7 @@ constexpr uint32_t SD_FREQUENCY_HZ = 25000000;
 constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
 constexpr uint8_t LOG_RETRY_LIMIT = 3;
+constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_MS = 1000;
 
 struct WeatherData {
   char condition[32] = "--";
@@ -127,6 +131,9 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
+bool japaneseFontReloadPending = false;
+bool drawingSuppressedBeforeFontSuspend = false;
+unsigned long nextJapaneseFontReloadAttempt = 0;
 bool displaySleepEnabled = AppSettings::DEFAULT_DISPLAY_SLEEP_ENABLED;
 uint8_t displaySleepMinutes = AppSettings::DEFAULT_DISPLAY_SLEEP_MINUTES;
 uint8_t displayBrightnessPercent =
@@ -147,6 +154,7 @@ bool scheduledForecastStopButtonConsumed = false;
 TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
+EarthquakeService earthquakeService;
 
 struct UpdateNotificationPlan {
   bool higherPriorityTriggered = false;
@@ -787,8 +795,91 @@ void drawForecast() {
   M5.Lcd.print("A:refresh B:speak/stop C:back");
 }
 
+const char* seismicScaleForDisplay(int scale) {
+  switch (scale) {
+    case 0: return "0";
+    case 10: return "1";
+    case 20: return "2";
+    case 30: return "3";
+    case 40: return "4";
+    case 45: return "5弱";
+    case 46: return "5弱以上";
+    case 50: return "5強";
+    case 55: return "6弱";
+    case 60: return "6強";
+    case 70: return "7";
+    case 99: return "5弱以上";
+    default: return "不明";
+  }
+}
+
+void drawSeismicEvent() {
+  if (displaySleeping || !earthquakeService.active()) return;
+  const SeismicEvent& event = earthquakeService.current();
+  M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
+  const bool japanese = japaneseFont.loaded();
+  const uint16_t headingColor =
+      event.test ? TFT_YELLOW
+                 : event.type == SeismicEventType::Eew ? TFT_RED : TFT_ORANGE;
+  char line[112];
+
+  if (event.type == SeismicEventType::Eew) {
+    snprintf(line, sizeof(line), "%s緊急地震速報 第%d報",
+             event.test ? "【試験】" : "", event.serial);
+  } else {
+    snprintf(line, sizeof(line), "%s地震情報", event.test ? "【試験】" : "");
+  }
+  if (japanese) {
+    japaneseFont.drawLineEllipsized(39, line, headingColor, TFT_BLACK);
+  } else {
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(headingColor, TFT_BLACK);
+    M5.Lcd.setCursor(12, 42);
+    M5.Lcd.print(event.type == SeismicEventType::Eew ? "EARTHQUAKE WARNING"
+                                                     : "EARTHQUAKE INFO");
+  }
+
+  if (event.cancelled) {
+    snprintf(line, sizeof(line), "この速報は取り消されました");
+  } else {
+    snprintf(line, sizeof(line), "対象: %s 最大震度%s", event.targetAreas,
+             seismicScaleForDisplay(event.maxScale));
+  }
+  if (japanese) {
+    japaneseFont.drawLineEllipsized(
+        77, line, event.cancelled ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "震源: %s", event.hypocenter);
+    japaneseFont.drawLineEllipsized(108, line, TFT_WHITE, TFT_BLACK);
+    if (event.magnitude >= 0) {
+      snprintf(line, sizeof(line), "M %.1f  %s %s", event.magnitude,
+               event.type == SeismicEventType::Eew ? "発表" : "発生",
+               event.eventTime);
+    } else {
+      snprintf(line, sizeof(line), "%s %s",
+               event.type == SeismicEventType::Eew ? "発表" : "発生",
+               event.eventTime);
+    }
+    japaneseFont.drawLineEllipsized(139, line, TFT_WHITE, TFT_BLACK);
+  } else {
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(event.cancelled ? TFT_YELLOW : TFT_WHITE, TFT_BLACK);
+    M5.Lcd.setCursor(12, 82);
+    M5.Lcd.printf("Scale: %s", seismicScaleForDisplay(event.maxScale));
+    M5.Lcd.setCursor(12, 112);
+    M5.Lcd.printf("M %.1f  %s", event.magnitude, event.eventTime);
+  }
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(12, 218);
+  M5.Lcd.print("P2PQuake realtime information");
+}
+
 void drawMainScreen() {
   if (displaySleeping || displayDrawingSuppressed) {
+    return;
+  }
+  if (earthquakeService.active()) {
+    drawSeismicEvent();
     return;
   }
   if (mainScreen == MainScreen::Forecast) {
@@ -975,6 +1066,9 @@ uint32_t localDateKey(const tm& localTime) {
 }
 
 void runScheduledForecastSpeech() {
+  if (earthquakeService.active()) {
+    return;
+  }
   tm localTime = {};
   if (!getLocalTime(&localTime, 10)) {
     return;
@@ -1054,44 +1148,59 @@ String buildOpenWeatherUrl(const char* endpoint, const char* language) {
 bool fetchCurrentWeather() {
   const String url = buildOpenWeatherUrl(WEATHER_API_URL, "en");
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.setTimeout(10000);
-  if (!http.begin(client, url)) {
-    Serial.println("Failed to initialize the weather request.");
-    return false;
-  }
+  logRuntimeMemory("current weather before TLS");
+  {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setTimeout(10000);
+    if (!http.begin(client, url)) {
+      Serial.println("Failed to initialize the weather request.");
+      logRuntimeMemory("current weather begin failed");
+      return false;
+    }
 
-  Serial.println("Requesting current weather...");
-  const int statusCode = http.GET();
-  if (statusCode != HTTP_CODE_OK) {
-    Serial.printf("Weather API returned HTTP %d.\n", statusCode);
+    Serial.println("Requesting current weather...");
+    const int statusCode = http.GET();
+    logRuntimeMemory("current weather after GET");
+    if (statusCode != HTTP_CODE_OK) {
+      if (statusCode < 0) {
+        Serial.printf("Weather API request failed: %d (%s).\n", statusCode,
+                      HTTPClient::errorToString(statusCode).c_str());
+      } else {
+        Serial.printf("Weather API returned HTTP %d.\n", statusCode);
+      }
+      http.end();
+      logRuntimeMemory("current weather failed after end");
+      return false;
+    }
+
+    JsonDocument document;
+    const DeserializationError error =
+        deserializeJson(document, http.getStream());
+    if (error) {
+      Serial.printf("Weather JSON parsing failed: %s\n", error.c_str());
+      http.end();
+      logRuntimeMemory("current weather parse failed after end");
+      return false;
+    }
+
+    strlcpy(weather.condition, document["weather"][0]["main"] | "Unknown",
+            sizeof(weather.condition));
+    weather.conditionId = document["weather"][0]["id"] | 0;
+    weather.cloudiness = document["clouds"]["all"].is<int>()
+                             ? document["clouds"]["all"].as<int>()
+                             : -1;
+    weather.temperature = document["main"]["temp"] | 0.0F;
+    weather.humidity = document["main"]["humidity"] | 0;
+    weather.pressure = document["main"]["pressure"] | 0;
+    weather.rainLastHour = document["rain"]["1h"] | 0.0F;
+    weather.observedAt = time(nullptr);
+    weather.valid = true;
     http.end();
-    return false;
+    logRuntimeMemory("current weather after end");
   }
-
-  JsonDocument document;
-  const DeserializationError error = deserializeJson(document, http.getStream());
-  if (error) {
-    Serial.printf("Weather JSON parsing failed: %s\n", error.c_str());
-    http.end();
-    return false;
-  }
-
-  strlcpy(weather.condition, document["weather"][0]["main"] | "Unknown",
-          sizeof(weather.condition));
-  weather.conditionId = document["weather"][0]["id"] | 0;
-  weather.cloudiness =
-      document["clouds"]["all"].is<int>() ? document["clouds"]["all"].as<int>()
-                                           : -1;
-  weather.temperature = document["main"]["temp"] | 0.0F;
-  weather.humidity = document["main"]["humidity"] | 0;
-  weather.pressure = document["main"]["pressure"] | 0;
-  weather.rainLastHour = document["rain"]["1h"] | 0.0F;
-  weather.observedAt = time(nullptr);
-  weather.valid = true;
-  http.end();
+  logRuntimeMemory("current weather TLS released");
 
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
@@ -1141,21 +1250,30 @@ bool fetchForecast() {
   const String url =
       buildOpenWeatherUrl(FORECAST_API_URL, "ja") + "&cnt=" +
       String(static_cast<unsigned int>(FORECAST_ENTRY_COUNT));
+  logRuntimeMemory("forecast before TLS");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, url)) {
     Serial.println("Failed to initialize the forecast request.");
+    logRuntimeMemory("forecast begin failed");
     markForecastRequestFailed();
     return false;
   }
 
   Serial.println("Requesting forecast...");
   const int statusCode = http.GET();
+  logRuntimeMemory("forecast after GET");
   if (statusCode != HTTP_CODE_OK) {
-    Serial.printf("Forecast API returned HTTP %d.\n", statusCode);
+    if (statusCode < 0) {
+      Serial.printf("Forecast API request failed: %d (%s).\n", statusCode,
+                    HTTPClient::errorToString(statusCode).c_str());
+    } else {
+      Serial.printf("Forecast API returned HTTP %d.\n", statusCode);
+    }
     http.end();
+    logRuntimeMemory("forecast failed after end");
     markForecastRequestFailed();
     return false;
   }
@@ -1175,6 +1293,7 @@ bool fetchForecast() {
   const DeserializationError error = deserializeJson(
       document, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
+  logRuntimeMemory("forecast after end");
   if (error) {
     Serial.printf("Forecast JSON parsing failed: %s\n", error.c_str());
     markForecastRequestFailed();
@@ -1252,6 +1371,14 @@ bool fetchForecast() {
 }
 
 void applyNotificationPlan() {
+  if (earthquakeService.active()) {
+    if (notificationPlan.higherPriorityTriggered ||
+        notificationPlan.rainForecastTriggered) {
+      Serial.println(
+          "Weather notification audio suppressed by seismic information.");
+    }
+    return;
+  }
   if (notificationPlan.higherPriorityTriggered) {
     mainScreen = MainScreen::CurrentWeather;
   } else if (notificationPlan.rainForecastTriggered) {
@@ -1298,6 +1425,7 @@ bool updateWeather(WeatherRequestSource source,
   weatherAttempted = true;
   Serial.printf("Weather request source: %s.\n",
                 weatherRequestSourceName(source));
+  logRuntimeMemory("weather update start");
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Weather update skipped because Wi-Fi is disconnected.");
     markForecastRequestFailed();
@@ -1305,26 +1433,81 @@ bool updateWeather(WeatherRequestSource source,
     return false;
   }
 
+  const bool earthquakeConnectionPaused =
+      earthquakeService.pauseForNetworkRequest();
+  const bool japaneseFontSuspended = japaneseFont.suspendForNetworkRequest();
+  const bool drawingWasSuppressed = displayDrawingSuppressed;
+  if (japaneseFontSuspended) displayDrawingSuppressed = true;
   notificationPlan.reset();
   const bool currentUpdated = fetchCurrentWeather();
+  Serial.printf("Current weather request result: %s.\n",
+                currentUpdated ? "success" : "failed");
+  logRuntimeMemory("after current weather and Ambient");
   const bool forecastUpdated = fetchForecast();
+  Serial.printf("Forecast request result: %s.\n",
+                forecastUpdated ? "success" : "failed");
+  logRuntimeMemory("after forecast");
   if (revealDisplayAfterFetch) {
-    displayDrawingSuppressed = false;
-    drawDateTime();
-    drawMainScreen();
+    // Keep drawing suppressed while the SD-backed font is unloaded. The
+    // completed screen is drawn after a successful reload below.
+    if (!japaneseFontSuspended && !japaneseFontReloadPending) {
+      displayDrawingSuppressed = false;
+      drawDateTime();
+      drawMainScreen();
+    }
   }
-  applyNotificationPlan();
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
+    logRuntimeMemory("before ThingSpeak publish");
     thingSpeakPublishResult = thingSpeakPublisher.publish(
         weather.observedAt, weather.temperature, weather.humidity,
         weather.pressure, weather.conditionId,
         forecast.entries[0].precipitationProbability,
         temperatureAlerts.activeThreshold(weather.temperature), WiFi.RSSI(),
         rainAlerts.isRainActive());
+    logRuntimeMemory("after ThingSpeak publish");
+  } else {
+    Serial.printf(
+        "ThingSpeak publish skipped: current=%s, forecast=%s, "
+        "weatherValid=%s, forecastValid=%s, forecastCount=%u.\n",
+        currentUpdated ? "success" : "failed",
+        forecastUpdated ? "success" : "failed", weather.valid ? "yes" : "no",
+        forecast.valid ? "yes" : "no",
+        static_cast<unsigned>(forecast.count));
   }
+  if (earthquakeConnectionPaused) {
+    earthquakeService.resumeAfterNetworkRequest();
+  }
+  if (japaneseFontSuspended) {
+    if (japaneseFont.resumeAfterNetworkRequest()) {
+      displayDrawingSuppressed = drawingWasSuppressed;
+    } else {
+      japaneseFontReloadPending = true;
+      drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
+      nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+      Serial.println("Japanese font reload will be retried from loop().");
+    }
+  }
+  applyNotificationPlan();
+  logRuntimeMemory("weather update complete");
   drawMainScreen();
   return currentUpdated || forecastUpdated;
+}
+
+void retryJapaneseFontReload() {
+  if (!japaneseFontReloadPending ||
+      static_cast<long>(millis() - nextJapaneseFontReloadAttempt) < 0) {
+    return;
+  }
+  if (!japaneseFont.resumeAfterNetworkRequest()) {
+    nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+    return;
+  }
+  japaneseFontReloadPending = false;
+  displayDrawingSuppressed = drawingSuppressedBeforeFontSuspend;
+  Serial.println("Japanese font reload retry succeeded.");
+  drawDateTime();
+  drawMainScreen();
 }
 }  // namespace
 
@@ -1354,6 +1537,12 @@ void setup() {
   connectToWiFi();
   webDownloadServer.begin(storageAvailable);
   syncTimeWithNtp();
+
+  earthquakeService.begin(
+      EARTHQUAKE_TARGET_PREFECTURES,
+      sizeof(EARTHQUAKE_TARGET_PREFECTURES) /
+          sizeof(EARTHQUAKE_TARGET_PREFECTURES[0]),
+      EARTHQUAKE_USE_SANDBOX, EARTHQUAKE_ALLOW_SANDBOX_AUDIO);
 
   displayDrawingSuppressed = true;
   updateWeather(WeatherRequestSource::Startup, !settingsRequested);
@@ -1390,12 +1579,32 @@ void setup() {
 
 void loop() {
   M5.update();
+  retryJapaneseFontReload();
+  earthquakeService.loop();
   webDownloadServer.handleClient();
   thingSpeakPublisher.handle();
   processWeatherLogRetry();
   temperatureAlerts.processPendingLogs();
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
+
+  if (earthquakeService.consumeWakeRequested()) {
+    wakeDisplay(DisplayWakeReason::Notification);
+  }
+  const SeismicSoundType seismicSound =
+      earthquakeService.consumeSoundRequested();
+  if (seismicSound != SeismicSoundType::None) {
+    if (speechAvailable) {
+      speech.playAlertTone(180,
+                           seismicSound == SeismicSoundType::EewWarning ? 3 : 1);
+    } else {
+      Serial.println("Seismic alert tone skipped because audio is unavailable.");
+    }
+  }
+  if (earthquakeService.consumeDisplayChanged()) {
+    drawDateTime();
+    drawMainScreen();
+  }
 
   if (displaySleeping) {
     const bool wakeButtonPressed =
@@ -1423,7 +1632,14 @@ void loop() {
 
   runScheduledForecastSpeech();
 
-  if (!displaySleeping && M5.BtnA.wasPressed()) {
+  const bool seismicDisplayActive = earthquakeService.active();
+  if (seismicDisplayActive &&
+      (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed())) {
+    noteDisplayActivity();
+    buttonAConfirmationPending = false;
+    Serial.println("Button press ignored while seismic information is shown.");
+  }
+  if (!displaySleeping && !seismicDisplayActive && M5.BtnA.wasPressed()) {
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
     Serial.printf("Button A signal detected (raw pin: %d).\n",
@@ -1445,14 +1661,15 @@ void loop() {
   }
   if (scheduledForecastStopButtonConsumed) {
     scheduledForecastStopButtonConsumed = false;
-  } else if (!displaySleeping && M5.BtnB.wasPressed()) {
+  } else if (!displaySleeping && !seismicDisplayActive &&
+             M5.BtnB.wasPressed()) {
     noteDisplayActivity();
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }
     toggleScreenSpeech();
   }
-  if (!displaySleeping && M5.BtnC.wasPressed()) {
+  if (!displaySleeping && !seismicDisplayActive && M5.BtnC.wasPressed()) {
     noteDisplayActivity();
     mainScreen = mainScreen == MainScreen::CurrentWeather
                      ? MainScreen::Forecast

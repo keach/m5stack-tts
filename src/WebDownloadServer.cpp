@@ -2,6 +2,7 @@
 
 #include <SD.h>
 #include <WiFi.h>
+#include "EarthquakeHistoryService.h"
 #include "SdCardLock.h"
 
 namespace {
@@ -16,8 +17,10 @@ constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
 constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);
 }
 
-void WebDownloadServer::begin(bool storageAvailable) {
+void WebDownloadServer::begin(
+    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory) {
   storageAvailable_ = storageAvailable;
+  earthquakeHistory_ = earthquakeHistory;
   registerRoutes();
   startIfReady();
 }
@@ -28,6 +31,8 @@ void WebDownloadServer::registerRoutes() {
     server_.on(DOWNLOADS[index].route, HTTP_GET,
                [this, index]() { sendDownload(DOWNLOADS[index]); });
   }
+  server_.on("/download/earthquake-history", HTTP_GET,
+             [this]() { sendEarthquakeHistoryDownload(); });
   server_.onNotFound([this]() { sendText(404, "Not Found"); });
   routesRegistered_ = true;
 }
@@ -53,7 +58,7 @@ void WebDownloadServer::sendIndex() {
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
   String html;
-  html.reserve(1400);
+  html.reserve(8192);
   html = F("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>M5 Weather Data</title></head><body><h1>M5 Weather Data</h1><ul>");
   for (const DownloadFile& download : DOWNLOADS) {
     html += F("<li>"); html += download.label; html += F(" ("); html += download.path; html += F("): ");
@@ -67,7 +72,9 @@ void WebDownloadServer::sendIndex() {
     } else html += F("Not created yet");
     html += F("</li>");
   }
-  html += F("</ul></body></html>");
+  html += F("</ul>");
+  if (earthquakeHistory_) earthquakeHistory_->appendWebSectionLocked(html);
+  html += F("</body></html>");
   server_.sendHeader("X-Content-Type-Options", "nosniff");
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(200, "text/html; charset=utf-8", html);
@@ -84,5 +91,55 @@ void WebDownloadServer::sendDownload(const DownloadFile& download) {
   server_.sendHeader("Content-Disposition",
                      String("attachment; filename=\"") + download.downloadName + "\"");
   server_.streamFile(file, download.contentType);
+  file.close();
+}
+
+void WebDownloadServer::sendEarthquakeHistoryDownload() {
+  if (!storageAvailable_ || !earthquakeHistory_) {
+    sendText(503, "Earthquake history is unavailable");
+    return;
+  }
+  const String type = server_.arg("type");
+  const String generationText = server_.arg("generation");
+  if ((type != "eew" && type != "earthquake") ||
+      generationText.length() != 6) {
+    sendText(400, "Invalid history download parameters");
+    return;
+  }
+  uint32_t generation = 0;
+  for (size_t index = 0; index < generationText.length(); ++index) {
+    const char value = generationText[index];
+    if (value < '0' || value > '9') {
+      sendText(400, "Invalid history generation");
+      return;
+    }
+    generation = generation * 10 + static_cast<uint32_t>(value - '0');
+  }
+  const EarthquakeHistoryKind kind =
+      type == "eew" ? EarthquakeHistoryKind::Eew
+                    : EarthquakeHistoryKind::Earthquake;
+  char path[48];
+  if (!earthquakeHistory_->resolvePath(kind, generation, path,
+                                       sizeof(path))) {
+    sendText(404, "History generation not found");
+    return;
+  }
+  SdCardGuard sdGuard;
+  if (!sdGuard.locked()) {
+    sendText(503, "microSD is busy");
+    return;
+  }
+  File file = SD.open(path, FILE_READ);
+  if (!file) {
+    sendText(503, "Unable to open history file");
+    return;
+  }
+  server_.sendHeader("X-Content-Type-Options", "nosniff");
+  server_.sendHeader("Cache-Control", "no-store");
+  server_.sendHeader(
+      "Content-Disposition",
+      String("attachment; filename=\"") + (path[0] == '/' ? path + 1 : path) +
+          "\"");
+  server_.streamFile(file, "application/x-ndjson; charset=utf-8");
   file.close();
 }

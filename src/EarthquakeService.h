@@ -5,6 +5,8 @@
 #include <Preferences.h>
 #include <WebSocketsClient.h>
 
+class EarthquakeHistoryService;
+
 enum class SeismicEventType : uint8_t {
   None,
   Earthquake,
@@ -23,6 +25,7 @@ struct SeismicEvent {
   char eventId[40] = {};
   char hypocenter[64] = {};
   char targetAreas[80] = {};
+  char matchedAreas[192] = {};
   char eventTime[20] = {};
   int serial = 0;
   int maxScale = -1;
@@ -36,7 +39,8 @@ struct SeismicEvent {
 class EarthquakeService {
  public:
   void begin(const char* const* targetPrefectures, size_t targetCount,
-             bool useSandbox, bool allowSandboxAudio);
+             bool useSandbox, bool allowSandboxAudio,
+             EarthquakeHistoryService* historyService = nullptr);
   void loop();
   bool pauseForNetworkRequest();
   void resumeAfterNetworkRequest();
@@ -55,6 +59,11 @@ class EarthquakeService {
   void processMessage(const uint8_t* payload, size_t length);
   void processEew(JsonDocument& document);
   void processEarthquake(JsonDocument& document);
+  void enqueueEewHistory(JsonDocument& document, const SeismicEvent& event);
+  void enqueueEarthquakeHistory(JsonDocument& document,
+                                const SeismicEvent& event,
+                                int nationalMaxScale,
+                                const char* logicalKey);
   bool isDuplicateId(const char* id) const;
   void rememberId(const char* id);
   bool isTargetPrefecture(const char* prefecture) const;
@@ -68,6 +77,7 @@ class EarthquakeService {
 
   WebSocketsClient webSocket_;
   Preferences preferences_;
+  EarthquakeHistoryService* historyService_ = nullptr;
   const char* targets_[MAX_TARGET_PREFECTURES] = {};
   size_t targetCount_ = 0;
   char recentIds_[RECENT_ID_COUNT][48] = {};

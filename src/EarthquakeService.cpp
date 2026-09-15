@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "RuntimeDiagnostics.h"
+#include "EarthquakeHistoryService.h"
 
 namespace {
 constexpr char PRODUCTION_HOST[] = "api.p2pquake.net";
@@ -106,6 +107,12 @@ void appendArea(char* destination, size_t capacity, const char* area,
   strlcat(destination, area, capacity);
 }
 
+void appendMatchedArea(char* destination, size_t capacity, const char* area) {
+  if (!area || area[0] == '\0') return;
+  if (destination[0] != '\0') strlcat(destination, "・", capacity);
+  strlcat(destination, area, capacity);
+}
+
 bool parseJstTime(const char* value, time_t* result) {
   if (!value || !result || strlen(value) < 19) return false;
   int year = 0;
@@ -145,13 +152,24 @@ void copyDisplayTime(char* destination, size_t capacity, const char* source) {
                    source[15], '\0'};
   copyText(destination, capacity, value);
 }
+
+void formatReceivedTime(char* destination, size_t capacity) {
+  const time_t now = time(nullptr);
+  tm utc = {};
+  if (now < MINIMUM_VALID_TIME || !gmtime_r(&now, &utc)) {
+    copyText(destination, capacity, "");
+    return;
+  }
+  strftime(destination, capacity, "%Y-%m-%dT%H:%M:%SZ", &utc);
+}
 }  // namespace
 
 EarthquakeService* EarthquakeService::instance_ = nullptr;
 
 void EarthquakeService::begin(const char* const* targetPrefectures,
                               size_t targetCount, bool useSandbox,
-                              bool allowSandboxAudio) {
+                              bool allowSandboxAudio,
+                              EarthquakeHistoryService* historyService) {
   const size_t requestedCount = min(targetCount, MAX_TARGET_PREFECTURES);
   if (targetCount > MAX_TARGET_PREFECTURES) {
     Serial.printf("Earthquake target list truncated from %u to %u entries.\n",
@@ -190,6 +208,7 @@ void EarthquakeService::begin(const char* const* targetPrefectures,
   }
   useSandbox_ = useSandbox;
   allowSandboxAudio_ = allowSandboxAudio;
+  historyService_ = historyService;
   if (targetCount_ == 0) {
     Serial.println("Earthquake target prefectures are not configured.");
   }
@@ -349,7 +368,10 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
   filter["issue"]["time"] = true;
   filter["issue"]["eventId"] = true;
   filter["issue"]["serial"] = true;
+  filter["issue"]["type"] = true;
+  filter["issue"]["correct"] = true;
   filter["earthquake"]["time"] = true;
+  filter["earthquake"]["originTime"] = true;
   filter["earthquake"]["maxScale"] = true;
   filter["earthquake"]["magnitude"] = true;
   filter["earthquake"]["hypocenter"]["name"] = true;
@@ -425,6 +447,8 @@ void EarthquakeService::processEew(JsonDocument& document) {
       ++matchedCount;
       appendArea(updated.targetAreas, sizeof(updated.targetAreas),
                  targets_[target], matchedCount);
+      appendMatchedArea(updated.matchedAreas, sizeof(updated.matchedAreas),
+                        targets_[target]);
     }
   }
   updated.targetMatched = matchedCount > 0;
@@ -433,6 +457,8 @@ void EarthquakeService::processEew(JsonDocument& document) {
     updated.targetMatched = eew_.targetMatched;
     copyText(updated.targetAreas, sizeof(updated.targetAreas),
              eew_.targetAreas);
+    copyText(updated.matchedAreas, sizeof(updated.matchedAreas),
+             eew_.matchedAreas);
     updated.maxScale = eew_.maxScale;
     if (strcmp(updated.hypocenter, "不明") == 0) {
       copyText(updated.hypocenter, sizeof(updated.hypocenter),
@@ -450,6 +476,7 @@ void EarthquakeService::processEew(JsonDocument& document) {
                                        sizeof(updated.targetAreas), "対象外");
 
   eew_ = updated;
+  enqueueEewHistory(document, updated);
   copyText(lastEewEventId_, sizeof(lastEewEventId_), eventId);
   lastEewSerial_ = serial;
   preferences_.putString("eew_event", eventId);
@@ -496,6 +523,10 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
   updated.test = useSandbox_;
   updated.receivedAt = millis();
   const int overallMaxScale = document["earthquake"]["maxScale"] | -1;
+  char logicalKey[128] = {};
+  snprintf(logicalKey, sizeof(logicalKey), "%s|%s",
+           document["earthquake"]["time"] | document["time"] | "",
+           updated.hypocenter);
 
   size_t matchedCount = 0;
   const JsonArray points = document["points"].as<JsonArray>();
@@ -511,6 +542,8 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
       ++matchedCount;
       appendArea(updated.targetAreas, sizeof(updated.targetAreas),
                  targets_[target], matchedCount);
+      appendMatchedArea(updated.matchedAreas, sizeof(updated.matchedAreas),
+                        targets_[target]);
     }
   }
   if (matchedCount > 2) {
@@ -526,13 +559,12 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
   }
   earthquake_ = updated;
   if (updated.targetMatched) {
+    enqueueEarthquakeHistory(document, updated, overallMaxScale, logicalKey);
+  }
+  if (updated.targetMatched) {
     wakeRequested_ = true;
     const bool audioAllowed =
         !updated.test || (useSandbox_ && allowSandboxAudio_);
-    char logicalKey[sizeof(lastSoundedEarthquakeKey_)] = {};
-    snprintf(logicalKey, sizeof(logicalKey), "%s|%s",
-             document["earthquake"]["time"] | document["time"] | "",
-             updated.hypocenter);
     if (audioAllowed && strcmp(lastSoundedEarthquakeKey_, logicalKey) != 0) {
       if (soundRequested_ == SeismicSoundType::None) {
         soundRequested_ = SeismicSoundType::Short;
@@ -546,6 +578,67 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
                 scaleText(updated.maxScale), updated.targetAreas,
                 updated.test ? " test" : "");
   selectCurrentEvent();
+}
+
+void EarthquakeService::enqueueEewHistory(JsonDocument& document,
+                                          const SeismicEvent& event) {
+  if (!historyService_) return;
+  JsonDocument history;
+  history["schema_version"] = 1;
+  history["kind"] = "eew";
+  history["id"] = event.id;
+  history["event_id"] = event.eventId;
+  history["serial"] = event.serial;
+  history["cancelled"] = event.cancelled;
+  history["test"] = event.test;
+  history["issue_time"] = document["issue"]["time"] | document["time"] | "";
+  history["event_time"] = document["earthquake"]["originTime"] | "";
+  char receivedAt[25] = {};
+  formatReceivedTime(receivedAt, sizeof(receivedAt));
+  history["received_at"] = receivedAt;
+  history["hypocenter"] = event.hypocenter;
+  history["magnitude"] = event.magnitude;
+  history["max_scale"] = event.maxScale;
+  history["target_matched"] = event.targetMatched;
+  history["target_areas"] = event.matchedAreas;
+  char json[EarthquakeHistoryService::MAX_RECORD_BYTES] = {};
+  if (measureJson(history) >= sizeof(json)) {
+    Serial.println("EEW history record exceeds serialization limit.");
+    return;
+  }
+  const size_t length = serializeJson(history, json, sizeof(json));
+  historyService_->enqueue(EarthquakeHistoryKind::Eew, json, length);
+}
+
+void EarthquakeService::enqueueEarthquakeHistory(
+    JsonDocument& document, const SeismicEvent& event, int nationalMaxScale,
+    const char* logicalKey) {
+  if (!historyService_) return;
+  JsonDocument history;
+  history["schema_version"] = 1;
+  history["kind"] = "earthquake";
+  history["id"] = event.id;
+  history["logical_key"] = logicalKey;
+  history["info_type"] = document["issue"]["type"] | "Other";
+  history["correction"] = document["issue"]["correct"] | "Unknown";
+  history["test"] = event.test;
+  history["event_time"] = document["earthquake"]["time"] | "";
+  history["issue_time"] = document["issue"]["time"] | document["time"] | "";
+  char receivedAt[25] = {};
+  formatReceivedTime(receivedAt, sizeof(receivedAt));
+  history["received_at"] = receivedAt;
+  history["hypocenter"] = event.hypocenter;
+  history["magnitude"] = event.magnitude;
+  history["national_max_scale"] = nationalMaxScale;
+  history["target_max_scale"] = event.maxScale;
+  history["target_prefectures"] = event.matchedAreas;
+  char json[EarthquakeHistoryService::MAX_RECORD_BYTES] = {};
+  if (measureJson(history) >= sizeof(json)) {
+    Serial.println("Earthquake history record exceeds serialization limit.");
+    return;
+  }
+  const size_t length = serializeJson(history, json, sizeof(json));
+  historyService_->enqueue(EarthquakeHistoryKind::Earthquake, json, length);
 }
 
 bool EarthquakeService::isDuplicateId(const char* id) const {

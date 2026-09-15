@@ -55,6 +55,7 @@ constexpr uint32_t SD_FREQUENCY_HZ = 25000000;
 constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
 constexpr uint8_t LOG_RETRY_LIMIT = 3;
+constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_MS = 1000;
 
 struct WeatherData {
   char condition[32] = "--";
@@ -130,6 +131,9 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
+bool japaneseFontReloadPending = false;
+bool drawingSuppressedBeforeFontSuspend = false;
+unsigned long nextJapaneseFontReloadAttempt = 0;
 bool displaySleepEnabled = AppSettings::DEFAULT_DISPLAY_SLEEP_ENABLED;
 uint8_t displaySleepMinutes = AppSettings::DEFAULT_DISPLAY_SLEEP_MINUTES;
 uint8_t displayBrightnessPercent =
@@ -1444,9 +1448,13 @@ bool updateWeather(WeatherRequestSource source,
                 forecastUpdated ? "success" : "failed");
   logRuntimeMemory("after forecast");
   if (revealDisplayAfterFetch) {
-    displayDrawingSuppressed = false;
-    drawDateTime();
-    drawMainScreen();
+    // Keep drawing suppressed while the SD-backed font is unloaded. The
+    // completed screen is drawn after a successful reload below.
+    if (!japaneseFontSuspended && !japaneseFontReloadPending) {
+      displayDrawingSuppressed = false;
+      drawDateTime();
+      drawMainScreen();
+    }
   }
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
@@ -1471,13 +1479,35 @@ bool updateWeather(WeatherRequestSource source,
     earthquakeService.resumeAfterNetworkRequest();
   }
   if (japaneseFontSuspended) {
-    japaneseFont.resumeAfterNetworkRequest();
-    displayDrawingSuppressed = drawingWasSuppressed;
+    if (japaneseFont.resumeAfterNetworkRequest()) {
+      displayDrawingSuppressed = drawingWasSuppressed;
+    } else {
+      japaneseFontReloadPending = true;
+      drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
+      nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+      Serial.println("Japanese font reload will be retried from loop().");
+    }
   }
   applyNotificationPlan();
   logRuntimeMemory("weather update complete");
   drawMainScreen();
   return currentUpdated || forecastUpdated;
+}
+
+void retryJapaneseFontReload() {
+  if (!japaneseFontReloadPending ||
+      static_cast<long>(millis() - nextJapaneseFontReloadAttempt) < 0) {
+    return;
+  }
+  if (!japaneseFont.resumeAfterNetworkRequest()) {
+    nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+    return;
+  }
+  japaneseFontReloadPending = false;
+  displayDrawingSuppressed = drawingSuppressedBeforeFontSuspend;
+  Serial.println("Japanese font reload retry succeeded.");
+  drawDateTime();
+  drawMainScreen();
 }
 }  // namespace
 
@@ -1549,6 +1579,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  retryJapaneseFontReload();
   earthquakeService.loop();
   webDownloadServer.handleClient();
   thingSpeakPublisher.handle();

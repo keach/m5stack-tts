@@ -429,6 +429,12 @@ size_t EarthquakeHistoryService::appendLatestRowsFromFileLocked(
   size_t length = 0;
   size_t rows = 0;
   size_t position = size;
+  if (!file.seek(size - 1)) {
+    file.close();
+    return 0;
+  }
+  const bool endsWithNewline = file.read() == '\n';
+  bool discardIncompleteTail = !endsWithNewline;
   uint8_t buffer[256];
   while (position > 0 && rows < maximumRows) {
     const size_t chunk = min(position, sizeof(buffer));
@@ -437,6 +443,11 @@ size_t EarthquakeHistoryService::appendLatestRowsFromFileLocked(
     for (size_t offset = chunk; offset > 0 && rows < maximumRows; --offset) {
       const char value = static_cast<char>(buffer[offset - 1]);
       if (value == '\n') {
+        if (discardIncompleteTail) {
+          length = 0;
+          discardIncompleteTail = false;
+          continue;
+        }
         if (length == 0) continue;
         char line[MAX_RECORD_BYTES] = {};
         for (size_t index = 0; index < length; ++index) {
@@ -451,7 +462,8 @@ size_t EarthquakeHistoryService::appendLatestRowsFromFileLocked(
       }
     }
   }
-  if (rows < maximumRows && length > 0 && position == 0) {
+  if (!discardIncompleteTail && rows < maximumRows && length > 0 &&
+      position == 0) {
     char line[MAX_RECORD_BYTES] = {};
     for (size_t index = 0; index < length; ++index) {
       line[index] = reversed[length - index - 1];

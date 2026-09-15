@@ -14,6 +14,7 @@
 #include "AmbientPublisher.h"
 #include "AppSettings.h"
 #include "EarthquakeService.h"
+#include "EarthquakeHistoryService.h"
 #include "RainAlertService.h"
 #include "RainForecastAlertService.h"
 #include "RuntimeDiagnostics.h"
@@ -155,6 +156,7 @@ TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
 EarthquakeService earthquakeService;
+EarthquakeHistoryService earthquakeHistory;
 
 struct UpdateNotificationPlan {
   bool higherPriorityTriggered = false;
@@ -1535,14 +1537,16 @@ void setup() {
   rainAlerts.begin();
   rainForecastAlerts.begin();
   connectToWiFi();
-  webDownloadServer.begin(storageAvailable);
+  earthquakeHistory.begin(storageAvailable);
+  webDownloadServer.begin(storageAvailable, &earthquakeHistory);
   syncTimeWithNtp();
 
   earthquakeService.begin(
       EARTHQUAKE_TARGET_PREFECTURES,
       sizeof(EARTHQUAKE_TARGET_PREFECTURES) /
           sizeof(EARTHQUAKE_TARGET_PREFECTURES[0]),
-      EARTHQUAKE_USE_SANDBOX, EARTHQUAKE_ALLOW_SANDBOX_AUDIO);
+      EARTHQUAKE_USE_SANDBOX, EARTHQUAKE_ALLOW_SANDBOX_AUDIO,
+      &earthquakeHistory);
 
   displayDrawingSuppressed = true;
   updateWeather(WeatherRequestSource::Startup, !settingsRequested);
@@ -1581,6 +1585,7 @@ void loop() {
   M5.update();
   retryJapaneseFontReload();
   earthquakeService.loop();
+  earthquakeHistory.loop();
   webDownloadServer.handleClient();
   thingSpeakPublisher.handle();
   processWeatherLogRetry();

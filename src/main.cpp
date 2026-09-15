@@ -16,6 +16,7 @@
 #include "EarthquakeService.h"
 #include "RainAlertService.h"
 #include "RainForecastAlertService.h"
+#include "RuntimeDiagnostics.h"
 #include "SdCardLock.h"
 #include "SettingsMode.h"
 #include "FirmwareInfo.h"
@@ -1143,20 +1144,29 @@ String buildOpenWeatherUrl(const char* endpoint, const char* language) {
 bool fetchCurrentWeather() {
   const String url = buildOpenWeatherUrl(WEATHER_API_URL, "en");
 
+  logRuntimeMemory("current weather before TLS");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, url)) {
     Serial.println("Failed to initialize the weather request.");
+    logRuntimeMemory("current weather begin failed");
     return false;
   }
 
   Serial.println("Requesting current weather...");
   const int statusCode = http.GET();
+  logRuntimeMemory("current weather after GET");
   if (statusCode != HTTP_CODE_OK) {
-    Serial.printf("Weather API returned HTTP %d.\n", statusCode);
+    if (statusCode < 0) {
+      Serial.printf("Weather API request failed: %d (%s).\n", statusCode,
+                    HTTPClient::errorToString(statusCode).c_str());
+    } else {
+      Serial.printf("Weather API returned HTTP %d.\n", statusCode);
+    }
     http.end();
+    logRuntimeMemory("current weather failed after end");
     return false;
   }
 
@@ -1165,6 +1175,7 @@ bool fetchCurrentWeather() {
   if (error) {
     Serial.printf("Weather JSON parsing failed: %s\n", error.c_str());
     http.end();
+    logRuntimeMemory("current weather parse failed after end");
     return false;
   }
 
@@ -1181,6 +1192,7 @@ bool fetchCurrentWeather() {
   weather.observedAt = time(nullptr);
   weather.valid = true;
   http.end();
+  logRuntimeMemory("current weather after end");
 
   tm localTime = {};
   const bool timeAvailable = getLocalTime(&localTime, 10);
@@ -1230,21 +1242,30 @@ bool fetchForecast() {
   const String url =
       buildOpenWeatherUrl(FORECAST_API_URL, "ja") + "&cnt=" +
       String(static_cast<unsigned int>(FORECAST_ENTRY_COUNT));
+  logRuntimeMemory("forecast before TLS");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, url)) {
     Serial.println("Failed to initialize the forecast request.");
+    logRuntimeMemory("forecast begin failed");
     markForecastRequestFailed();
     return false;
   }
 
   Serial.println("Requesting forecast...");
   const int statusCode = http.GET();
+  logRuntimeMemory("forecast after GET");
   if (statusCode != HTTP_CODE_OK) {
-    Serial.printf("Forecast API returned HTTP %d.\n", statusCode);
+    if (statusCode < 0) {
+      Serial.printf("Forecast API request failed: %d (%s).\n", statusCode,
+                    HTTPClient::errorToString(statusCode).c_str());
+    } else {
+      Serial.printf("Forecast API returned HTTP %d.\n", statusCode);
+    }
     http.end();
+    logRuntimeMemory("forecast failed after end");
     markForecastRequestFailed();
     return false;
   }
@@ -1264,6 +1285,7 @@ bool fetchForecast() {
   const DeserializationError error = deserializeJson(
       document, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
+  logRuntimeMemory("forecast after end");
   if (error) {
     Serial.printf("Forecast JSON parsing failed: %s\n", error.c_str());
     markForecastRequestFailed();
@@ -1395,6 +1417,7 @@ bool updateWeather(WeatherRequestSource source,
   weatherAttempted = true;
   Serial.printf("Weather request source: %s.\n",
                 weatherRequestSourceName(source));
+  logRuntimeMemory("weather update start");
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Weather update skipped because Wi-Fi is disconnected.");
     markForecastRequestFailed();
@@ -1404,7 +1427,13 @@ bool updateWeather(WeatherRequestSource source,
 
   notificationPlan.reset();
   const bool currentUpdated = fetchCurrentWeather();
+  Serial.printf("Current weather request result: %s.\n",
+                currentUpdated ? "success" : "failed");
+  logRuntimeMemory("after current weather and Ambient");
   const bool forecastUpdated = fetchForecast();
+  Serial.printf("Forecast request result: %s.\n",
+                forecastUpdated ? "success" : "failed");
+  logRuntimeMemory("after forecast");
   if (revealDisplayAfterFetch) {
     displayDrawingSuppressed = false;
     drawDateTime();
@@ -1413,13 +1442,24 @@ bool updateWeather(WeatherRequestSource source,
   applyNotificationPlan();
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
+    logRuntimeMemory("before ThingSpeak publish");
     thingSpeakPublishResult = thingSpeakPublisher.publish(
         weather.observedAt, weather.temperature, weather.humidity,
         weather.pressure, weather.conditionId,
         forecast.entries[0].precipitationProbability,
         temperatureAlerts.activeThreshold(weather.temperature), WiFi.RSSI(),
         rainAlerts.isRainActive());
+    logRuntimeMemory("after ThingSpeak publish");
+  } else {
+    Serial.printf(
+        "ThingSpeak publish skipped: current=%s, forecast=%s, "
+        "weatherValid=%s, forecastValid=%s, forecastCount=%u.\n",
+        currentUpdated ? "success" : "failed",
+        forecastUpdated ? "success" : "failed", weather.valid ? "yes" : "no",
+        forecast.valid ? "yes" : "no",
+        static_cast<unsigned>(forecast.count));
   }
+  logRuntimeMemory("weather update complete");
   drawMainScreen();
   return currentUpdated || forecastUpdated;
 }

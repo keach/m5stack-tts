@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 
 #include "SdCardLock.h"
+#include "RuntimeDiagnostics.h"
 #include "thingspeak_secrets.h"
 
 namespace {
@@ -261,6 +262,7 @@ ThingSpeakPublishResult ThingSpeakPublisher::postSingle(JsonDocument& record) {
   }
   String body;
   serializeJson(payload, body);
+  logRuntimeMemory("ThingSpeak single before TLS");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
@@ -269,6 +271,7 @@ ThingSpeakPublishResult ThingSpeakPublisher::postSingle(JsonDocument& record) {
   lastRequestStartedAt_ = millis();
   if (!http.begin(client, THINGSPEAK_UPDATE_URL)) {
     Serial.println("Failed to initialize the ThingSpeak request.");
+    logRuntimeMemory("ThingSpeak single begin failed");
     return ThingSpeakPublishResult::RequestFailed;
   }
   http.addHeader("Content-Type", "application/json");
@@ -277,10 +280,17 @@ ThingSpeakPublishResult ThingSpeakPublisher::postSingle(JsonDocument& record) {
       "Sending weather data to ThingSpeak channel %lu with created_at=%s.\n",
       THINGSPEAK_CHANNEL_ID, createdAt);
   const int statusCode = http.POST(body);
+  logRuntimeMemory("ThingSpeak single after POST");
   const String response = http.getString();
   http.end();
+  logRuntimeMemory("ThingSpeak single after end");
   if (statusCode < 200 || statusCode >= 300) {
-    Serial.printf("ThingSpeak API returned HTTP %d.\n", statusCode);
+    if (statusCode < 0) {
+      Serial.printf("ThingSpeak API request failed: %d (%s).\n", statusCode,
+                    HTTPClient::errorToString(statusCode).c_str());
+    } else {
+      Serial.printf("ThingSpeak API returned HTTP %d.\n", statusCode);
+    }
     return ThingSpeakPublishResult::RequestFailed;
   }
   JsonDocument responseDocument;
@@ -334,6 +344,7 @@ ThingSpeakPublishResult ThingSpeakPublisher::sendQueuedBatch() {
                      String(THINGSPEAK_CHANNEL_ID) + "/bulk_update.json";
   String body;
   serializeJson(payload, body);
+  logRuntimeMemory("ThingSpeak bulk before TLS");
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
@@ -342,16 +353,24 @@ ThingSpeakPublishResult ThingSpeakPublisher::sendQueuedBatch() {
   lastRequestStartedAt_ = millis();
   if (!http.begin(client, url)) {
     Serial.println("Failed to initialize the ThingSpeak bulk request.");
+    logRuntimeMemory("ThingSpeak bulk begin failed");
     return ThingSpeakPublishResult::RequestFailed;
   }
   http.addHeader("Content-Type", "application/json");
   Serial.printf("Retrying %u queued ThingSpeak record(s) with Bulk Update.\n",
                 static_cast<unsigned int>(validRecords));
   const int statusCode = http.POST(body);
+  logRuntimeMemory("ThingSpeak bulk after POST");
   const String response = http.getString();
   http.end();
+  logRuntimeMemory("ThingSpeak bulk after end");
   if (statusCode < 200 || statusCode >= 300) {
-    Serial.printf("ThingSpeak Bulk API returned HTTP %d.\n", statusCode);
+    if (statusCode < 0) {
+      Serial.printf("ThingSpeak Bulk API request failed: %d (%s).\n", statusCode,
+                    HTTPClient::errorToString(statusCode).c_str());
+    } else {
+      Serial.printf("ThingSpeak Bulk API returned HTTP %d.\n", statusCode);
+    }
     return ThingSpeakPublishResult::RequestFailed;
   }
   JsonDocument responseDocument;

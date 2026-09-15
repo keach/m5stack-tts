@@ -4,6 +4,8 @@
 #include <WiFi.h>
 #include <time.h>
 
+#include "RuntimeDiagnostics.h"
+
 namespace {
 constexpr char PRODUCTION_HOST[] = "api.p2pquake.net";
 constexpr char SANDBOX_HOST[] = "api-realtime-sandbox.p2pquake.net";
@@ -268,6 +270,7 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
       connecting_ = false;
       reconnectStep_ = 0;
       Serial.printf("P2PQuake WebSocket connected: %s\n", payload);
+      logRuntimeMemory("P2PQuake connected");
       break;
     case WStype_DISCONNECTED:
       if (connected_) Serial.println("P2PQuake WebSocket disconnected.");
@@ -275,12 +278,14 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
       connecting_ = false;
       webSocket_.setReconnectInterval(0xffffffffUL);
       scheduleReconnect();
+      logRuntimeMemory("P2PQuake disconnected");
       break;
     case WStype_TEXT:
       processMessage(payload, length);
       break;
     case WStype_ERROR:
       Serial.println("P2PQuake WebSocket error.");
+      logRuntimeMemory("P2PQuake error");
       break;
     default:
       break;
@@ -560,7 +565,9 @@ void EarthquakeService::connect() {
   const char* host = useSandbox_ ? SANDBOX_HOST : PRODUCTION_HOST;
   Serial.printf("Connecting to P2PQuake WebSocket: wss://%s%s\n", host,
                 WEB_SOCKET_PATH);
+  logRuntimeMemory("P2PQuake before beginSSL");
   connecting_ = true;
   webSocket_.beginSSL(host, WEB_SOCKET_PORT, WEB_SOCKET_PATH);
   webSocket_.setReconnectInterval(0);
+  logRuntimeMemory("P2PQuake after beginSSL");
 }

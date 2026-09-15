@@ -11,6 +11,12 @@ enum class SeismicEventType : uint8_t {
   Eew,
 };
 
+enum class SeismicSoundType : uint8_t {
+  None,
+  Short,
+  EewWarning,
+};
+
 struct SeismicEvent {
   SeismicEventType type = SeismicEventType::None;
   char id[48] = {};
@@ -30,14 +36,14 @@ struct SeismicEvent {
 class EarthquakeService {
  public:
   void begin(const char* const* targetPrefectures, size_t targetCount,
-             bool useSandbox);
+             bool useSandbox, bool allowSandboxAudio);
   void loop();
   bool pauseForNetworkRequest();
   void resumeAfterNetworkRequest();
   bool active() const;
   const SeismicEvent& current() const;
   bool consumeDisplayChanged();
-  bool consumeWarningRequested();
+  SeismicSoundType consumeSoundRequested();
   bool consumeWakeRequested();
 
  private:
@@ -71,12 +77,13 @@ class EarthquakeService {
   SeismicEvent earthquake_;
   SeismicEvent empty_;
   bool useSandbox_ = false;
+  bool allowSandboxAudio_ = false;
   bool connected_ = false;
   bool connecting_ = false;
   bool paused_ = false;
   bool started_ = false;
   bool displayChanged_ = false;
-  bool warningRequested_ = false;
+  SeismicSoundType soundRequested_ = SeismicSoundType::None;
   bool wakeRequested_ = false;
   uint8_t reconnectStep_ = 0;
   unsigned long reconnectAt_ = 0;
@@ -84,6 +91,8 @@ class EarthquakeService {
   SeismicEventType selectedType_ = SeismicEventType::None;
   char lastEewEventId_[40] = {};
   char lastWarnedEewEventId_[40] = {};
+  char lastShortEewEventId_[40] = {};
+  char lastSoundedEarthquakeKey_[128] = {};
   int lastEewSerial_ = 0;
 
   static EarthquakeService* instance_;

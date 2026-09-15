@@ -8,5 +8,9 @@ constexpr const char* EARTHQUAKE_TARGET_PREFECTURES[] = {
 };
 
 // Use only while validating the feature with P2PQuake's sandbox.
-// Sandbox messages are always shown as tests and never play the warning tone.
+// Sandbox messages are always shown as tests.
 constexpr bool EARTHQUAKE_USE_SANDBOX = false;
+
+// Keep this false in normal use. Set it to true only during an attended
+// sandbox test when alert sounds must also be verified.
+constexpr bool EARTHQUAKE_ALLOW_SANDBOX_AUDIO = false;

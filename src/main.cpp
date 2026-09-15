@@ -1512,7 +1512,7 @@ void setup() {
       EARTHQUAKE_TARGET_PREFECTURES,
       sizeof(EARTHQUAKE_TARGET_PREFECTURES) /
           sizeof(EARTHQUAKE_TARGET_PREFECTURES[0]),
-      EARTHQUAKE_USE_SANDBOX);
+      EARTHQUAKE_USE_SANDBOX, EARTHQUAKE_ALLOW_SANDBOX_AUDIO);
 
   displayDrawingSuppressed = true;
   updateWeather(WeatherRequestSource::Startup, !settingsRequested);
@@ -1560,11 +1560,14 @@ void loop() {
   if (earthquakeService.consumeWakeRequested()) {
     wakeDisplay(DisplayWakeReason::Notification);
   }
-  if (earthquakeService.consumeWarningRequested()) {
+  const SeismicSoundType seismicSound =
+      earthquakeService.consumeSoundRequested();
+  if (seismicSound != SeismicSoundType::None) {
     if (speechAvailable) {
-      speech.playAlertTone(180, 3);
+      speech.playAlertTone(180,
+                           seismicSound == SeismicSoundType::EewWarning ? 3 : 1);
     } else {
-      Serial.println("EEW warning tone skipped because audio is unavailable.");
+      Serial.println("Seismic alert tone skipped because audio is unavailable.");
     }
   }
   if (earthquakeService.consumeDisplayChanged()) {

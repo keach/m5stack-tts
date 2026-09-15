@@ -76,6 +76,11 @@ void copyText(char* destination, size_t capacity, const char* source) {
   strlcpy(destination, source ? source : "", capacity);
 }
 
+const char* messageId(JsonDocument& document) {
+  const char* id = document["id"] | "";
+  return id[0] != '\0' ? id : document["_id"] | "";
+}
+
 const char* scaleText(int scale) {
   switch (scale) {
     case 0: return "0";
@@ -145,7 +150,8 @@ void copyDisplayTime(char* destination, size_t capacity, const char* source) {
 EarthquakeService* EarthquakeService::instance_ = nullptr;
 
 void EarthquakeService::begin(const char* const* targetPrefectures,
-                              size_t targetCount, bool useSandbox) {
+                              size_t targetCount, bool useSandbox,
+                              bool allowSandboxAudio) {
   const size_t requestedCount = min(targetCount, MAX_TARGET_PREFECTURES);
   if (targetCount > MAX_TARGET_PREFECTURES) {
     Serial.printf("Earthquake target list truncated from %u to %u entries.\n",
@@ -183,6 +189,7 @@ void EarthquakeService::begin(const char* const* targetPrefectures,
     }
   }
   useSandbox_ = useSandbox;
+  allowSandboxAudio_ = allowSandboxAudio;
   if (targetCount_ == 0) {
     Serial.println("Earthquake target prefectures are not configured.");
   }
@@ -196,6 +203,12 @@ void EarthquakeService::begin(const char* const* targetPrefectures,
   String storedWarnedEventId = preferences_.getString("eew_warn", "");
   copyText(lastWarnedEewEventId_, sizeof(lastWarnedEewEventId_),
            storedWarnedEventId.c_str());
+  String storedShortEventId = preferences_.getString("eew_short", "");
+  copyText(lastShortEewEventId_, sizeof(lastShortEewEventId_),
+           storedShortEventId.c_str());
+  String storedEarthquakeKey = preferences_.getString("quake_sound", "");
+  copyText(lastSoundedEarthquakeKey_, sizeof(lastSoundedEarthquakeKey_),
+           storedEarthquakeKey.c_str());
 
   instance_ = this;
   webSocket_.onEvent(eventThunk);
@@ -272,9 +285,9 @@ bool EarthquakeService::consumeDisplayChanged() {
   return changed;
 }
 
-bool EarthquakeService::consumeWarningRequested() {
-  const bool requested = warningRequested_;
-  warningRequested_ = false;
+SeismicSoundType EarthquakeService::consumeSoundRequested() {
+  const SeismicSoundType requested = soundRequested_;
+  soundRequested_ = SeismicSoundType::None;
   return requested;
 }
 
@@ -328,6 +341,7 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
   JsonDocument document;
   JsonDocument filter;
   filter["id"] = true;
+  filter["_id"] = true;
   filter["code"] = true;
   filter["time"] = true;
   filter["test"] = true;
@@ -353,8 +367,9 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
   }
   const int code = document["code"] | 0;
   if (code != 551 && code != 556) return;
-  const char* id = document["id"] | "";
+  const char* id = messageId(document);
   if (id[0] == '\0' || isDuplicateId(id)) return;
+  Serial.printf("P2PQuake message received: code=%d id=%s.\n", code, id);
   if (isStale(document["time"] | "")) {
     Serial.printf("P2PQuake stale message ignored: %s\n", id);
     rememberId(id);
@@ -379,7 +394,7 @@ void EarthquakeService::processEew(JsonDocument& document) {
 
   SeismicEvent updated;
   updated.type = SeismicEventType::Eew;
-  copyText(updated.id, sizeof(updated.id), document["id"] | "");
+  copyText(updated.id, sizeof(updated.id), messageId(document));
   copyText(updated.eventId, sizeof(updated.eventId), eventId);
   copyText(updated.hypocenter, sizeof(updated.hypocenter),
            document["earthquake"]["hypocenter"]["name"] | "不明");
@@ -439,12 +454,26 @@ void EarthquakeService::processEew(JsonDocument& document) {
   lastEewSerial_ = serial;
   preferences_.putString("eew_event", eventId);
   preferences_.putInt("eew_serial", serial);
-  if (updated.targetMatched) wakeRequested_ = true;
-  if (updated.targetMatched && !updated.test && !updated.cancelled &&
-      strcmp(lastWarnedEewEventId_, eventId) != 0) {
-    warningRequested_ = true;
-    copyText(lastWarnedEewEventId_, sizeof(lastWarnedEewEventId_), eventId);
-    preferences_.putString("eew_warn", eventId);
+  // Every EEW wakes the display. Target matches use the dedicated warning
+  // tone; non-target events use one short tone. A later target match may still
+  // play the dedicated tone after an earlier non-target update.
+  wakeRequested_ = true;
+  const bool audioAllowed =
+      !updated.test || (useSandbox_ && allowSandboxAudio_);
+  if (audioAllowed && !updated.cancelled) {
+    if (updated.targetMatched &&
+        strcmp(lastWarnedEewEventId_, eventId) != 0) {
+      soundRequested_ = SeismicSoundType::EewWarning;
+      copyText(lastWarnedEewEventId_, sizeof(lastWarnedEewEventId_), eventId);
+      preferences_.putString("eew_warn", eventId);
+    } else if (!updated.targetMatched &&
+               strcmp(lastShortEewEventId_, eventId) != 0) {
+      if (soundRequested_ == SeismicSoundType::None) {
+        soundRequested_ = SeismicSoundType::Short;
+      }
+      copyText(lastShortEewEventId_, sizeof(lastShortEewEventId_), eventId);
+      preferences_.putString("eew_short", eventId);
+    }
   }
   Serial.printf("EEW received: event=%s serial=%d scale=%s target=%s%s%s\n",
                 updated.eventId, updated.serial, scaleText(updated.maxScale),
@@ -457,7 +486,7 @@ void EarthquakeService::processEew(JsonDocument& document) {
 void EarthquakeService::processEarthquake(JsonDocument& document) {
   SeismicEvent updated;
   updated.type = SeismicEventType::Earthquake;
-  copyText(updated.id, sizeof(updated.id), document["id"] | "");
+  copyText(updated.id, sizeof(updated.id), messageId(document));
   copyText(updated.hypocenter, sizeof(updated.hypocenter),
            document["earthquake"]["hypocenter"]["name"] | "不明");
   copyDisplayTime(updated.eventTime, sizeof(updated.eventTime),
@@ -466,6 +495,7 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
                       document["earthquake"]["magnitude"] | -1.0F;
   updated.test = useSandbox_;
   updated.receivedAt = millis();
+  const int overallMaxScale = document["earthquake"]["maxScale"] | -1;
 
   size_t matchedCount = 0;
   const JsonArray points = document["points"].as<JsonArray>();
@@ -483,16 +513,35 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
                  targets_[target], matchedCount);
     }
   }
-  if (matchedCount == 0) return;
   if (matchedCount > 2) {
     char suffix[24];
     snprintf(suffix, sizeof(suffix), " ほか%u地域",
              static_cast<unsigned>(matchedCount - 2));
     strlcat(updated.targetAreas, suffix, sizeof(updated.targetAreas));
   }
-  updated.targetMatched = true;
+  updated.targetMatched = matchedCount > 0;
+  if (!updated.targetMatched) {
+    updated.maxScale = overallMaxScale;
+    copyText(updated.targetAreas, sizeof(updated.targetAreas), "対象外");
+  }
   earthquake_ = updated;
-  wakeRequested_ = true;
+  if (updated.targetMatched) {
+    wakeRequested_ = true;
+    const bool audioAllowed =
+        !updated.test || (useSandbox_ && allowSandboxAudio_);
+    char logicalKey[sizeof(lastSoundedEarthquakeKey_)] = {};
+    snprintf(logicalKey, sizeof(logicalKey), "%s|%s",
+             document["earthquake"]["time"] | document["time"] | "",
+             updated.hypocenter);
+    if (audioAllowed && strcmp(lastSoundedEarthquakeKey_, logicalKey) != 0) {
+      if (soundRequested_ == SeismicSoundType::None) {
+        soundRequested_ = SeismicSoundType::Short;
+      }
+      copyText(lastSoundedEarthquakeKey_, sizeof(lastSoundedEarthquakeKey_),
+               logicalKey);
+      preferences_.putString("quake_sound", logicalKey);
+    }
+  }
   Serial.printf("Earthquake information received: scale=%s areas=%s%s\n",
                 scaleText(updated.maxScale), updated.targetAreas,
                 updated.test ? " test" : "");

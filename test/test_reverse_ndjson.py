@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReverseNdjsonTest(unittest.TestCase):
+    def test_diagnostic_model(self):
+        self.compile_and_run("diagnostic_model_test.cpp")
+
     def test_p2p_connection_status(self):
         self.compile_and_run("p2p_connection_test.cpp")
 

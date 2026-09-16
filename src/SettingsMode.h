@@ -5,20 +5,9 @@
 
 #include "AppSettings.h"
 #include "SpeechService.h"
+#include "DiagnosticModel.h"
 
-class EarthquakeService;
-
-struct DiagnosticStatus {
-  bool storageAvailable;
-  bool dictionaryAvailable;
-  bool speechAvailable;
-  bool wifiConnected;
-  bool timeSynchronized;
-  bool weatherAvailable;
-  bool japaneseFontAvailable;
-  IPAddress ipAddress;
-  const EarthquakeService* earthquakeService = nullptr;
-};
+using DiagnosticStatus = DiagnosticSource;
 
 class SettingsMode {
  public:
@@ -46,7 +35,7 @@ class SettingsMode {
   void showDiagnostics(const DiagnosticStatus& diagnostics,
                        bool displaySleepEnabled, uint8_t displaySleepMinutes,
                        uint8_t displayBrightnessPercent);
-  void drawDiagnostics(const DiagnosticStatus& diagnostics);
+  void drawDiagnostics(const DiagnosticStatus& diagnostics, size_t page);
   void showFirmwareInfo(bool displaySleepEnabled,
                         uint8_t displaySleepMinutes,
                         uint8_t displayBrightnessPercent);

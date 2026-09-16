@@ -16,6 +16,7 @@ enum class ThingSpeakPublishResult {
 class ThingSpeakPublisher {
  public:
   void handle();
+  bool hasPendingRecords() const { return pendingCount_ > 0; }
   ThingSpeakPublishResult publish(
       time_t observedAt, float temperature, int humidity, int pressure,
       int weatherConditionId, uint8_t precipitationProbability,

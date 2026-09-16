@@ -3,6 +3,7 @@
 #include <SD.h>
 #include <WiFi.h>
 #include "EarthquakeHistoryService.h"
+#include "EarthquakeService.h"
 #include "SdCardLock.h"
 
 namespace {
@@ -15,12 +16,30 @@ constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
     {"Rain forecast alerts", "/rain_forecast_alerts.csv", "/download/rain-forecast-alerts", "text/csv; charset=utf-8", "rain_forecast_alerts.csv"},
 };
 constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);
+
+class P2PQuakeNetworkGuard {
+ public:
+  explicit P2PQuakeNetworkGuard(EarthquakeService* earthquakeService)
+      : earthquakeService_(earthquakeService),
+        paused_(earthquakeService_ &&
+                earthquakeService_->pauseForNetworkRequest()) {}
+
+  ~P2PQuakeNetworkGuard() {
+    if (paused_) earthquakeService_->resumeAfterNetworkRequest();
+  }
+
+ private:
+  EarthquakeService* earthquakeService_;
+  bool paused_;
+};
 }
 
 void WebDownloadServer::begin(
-    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory) {
+    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory,
+    EarthquakeService* earthquakeService) {
   storageAvailable_ = storageAvailable;
   earthquakeHistory_ = earthquakeHistory;
+  earthquakeService_ = earthquakeService;
   registerRoutes();
   startIfReady();
 }
@@ -49,11 +68,13 @@ void WebDownloadServer::handleClient() {
   if (started_ && WiFi.status() == WL_CONNECTED) server_.handleClient();
 }
 void WebDownloadServer::sendText(int status, const char* message) {
+  P2PQuakeNetworkGuard networkGuard(earthquakeService_);
   server_.sendHeader("X-Content-Type-Options", "nosniff");
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(status, "text/plain; charset=utf-8", message);
 }
 void WebDownloadServer::sendIndex() {
+  P2PQuakeNetworkGuard networkGuard(earthquakeService_);
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -80,6 +101,7 @@ void WebDownloadServer::sendIndex() {
   server_.send(200, "text/html; charset=utf-8", html);
 }
 void WebDownloadServer::sendDownload(const DownloadFile& download) {
+  P2PQuakeNetworkGuard networkGuard(earthquakeService_);
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -95,6 +117,7 @@ void WebDownloadServer::sendDownload(const DownloadFile& download) {
 }
 
 void WebDownloadServer::sendEarthquakeHistoryDownload() {
+  P2PQuakeNetworkGuard networkGuard(earthquakeService_);
   if (!storageAvailable_ || !earthquakeHistory_) {
     sendText(503, "Earthquake history is unavailable");
     return;

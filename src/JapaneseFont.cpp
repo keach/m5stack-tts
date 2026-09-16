@@ -167,6 +167,17 @@ bool JapaneseFont::hasGlyph(uint32_t codePoint) const {
   return false;
 }
 
+void JapaneseFont::logRenderingState(const char* stage) const {
+  Serial.printf(
+      "Japanese font state [%s]: available=%s, loaded=%s, suspended=%s, "
+      "spriteFont=%s, fontFile=%s, glyphs=%u.\n",
+      stage, available_ ? "yes" : "no", loaded_ ? "yes" : "no",
+      suspended_ ? "yes" : "no", lineSprite_.fontLoaded ? "yes" : "no",
+      lineSprite_.fontFile ? "open" : "closed",
+      static_cast<unsigned>(glyphCount_));
+  logHeapIntegrity(stage);
+}
+
 String JapaneseFont::sanitize(const char* text) const {
   String result;
   if (!text) return result;

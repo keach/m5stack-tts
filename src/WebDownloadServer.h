@@ -2,6 +2,7 @@
 #include <WebServer.h>
 
 class EarthquakeHistoryService;
+class EarthquakeService;
 
 class WebDownloadServer {
  public:
@@ -13,7 +14,8 @@ class WebDownloadServer {
     const char* downloadName;
   };
   void begin(bool storageAvailable,
-             EarthquakeHistoryService* earthquakeHistory = nullptr);
+             EarthquakeHistoryService* earthquakeHistory = nullptr,
+             EarthquakeService* earthquakeService = nullptr);
   void handleClient();
   bool started() const { return started_; }
  private:
@@ -28,4 +30,5 @@ class WebDownloadServer {
   bool routesRegistered_ = false;
   bool started_ = false;
   EarthquakeHistoryService* earthquakeHistory_ = nullptr;
+  EarthquakeService* earthquakeService_ = nullptr;
 };

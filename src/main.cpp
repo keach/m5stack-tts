@@ -28,6 +28,7 @@
 #include "TemperatureAlertService.h"
 #include "ThingSpeakPublisher.h"
 #include "WebDownloadServer.h"
+#include "DiagnosticView.h"
 
 namespace {
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
@@ -189,6 +190,70 @@ ThingSpeakPublisher thingSpeakPublisher;
 ThingSpeakPublishResult thingSpeakPublishResult =
     ThingSpeakPublishResult::NotAttempted;
 WebDownloadServer webDownloadServer;
+DiagnosticModel diagnosticModel;
+bool startupDiagnosticsActive = false;
+
+void updateDiagnostic(DiagnosticItem item, DiagnosticState state,
+                      const char* detail = "") {
+  diagnosticModel.set(item, state, detail);
+  if (startupDiagnosticsActive)
+    drawDiagnosticPage(diagnosticModel, DiagnosticModel::pageFor(item), true);
+}
+
+void refreshDiagnostics(DiagnosticModel& model) {
+  const bool wifi = WiFi.status() == WL_CONNECTED;
+  snprintf(model.ip, sizeof(model.ip), "%s",
+           wifi ? WiFi.localIP().toString().c_str() : "-");
+  model.set(DiagnosticItem::Wifi, wifi ? DiagnosticState::Ok : DiagnosticState::Ng,
+            wifi ? "Connected" : "Waiting for Wi-Fi");
+  const auto p2p = earthquakeService.connectionState();
+  char detail[64];
+  snprintf(detail, sizeof(detail), "%s / %s",
+           EarthquakeService::connectionStateText(p2p),
+           earthquakeService.usesSandbox() ? "Sandbox" : "Production");
+  model.set(DiagnosticItem::P2PQuake,
+      p2p == P2PConnectionState::Connected ? DiagnosticState::Ok :
+      p2p == P2PConnectionState::NotStarted ? DiagnosticState::Ng : DiagnosticState::Wait,
+      detail);
+  tm now = {};
+  const bool timeReady = getLocalTime(&now, 10) &&
+      time(nullptr) >= MINIMUM_VALID_TIME;
+  model.set(DiagnosticItem::Ntp, timeReady ? DiagnosticState::Ok :
+      wifi ? DiagnosticState::Ng : DiagnosticState::Skip,
+      timeReady ? "Time available" : wifi ? "Time unavailable" : "Wi-Fi unavailable");
+  model.webAvailable = wifi && webDownloadServer.started();
+  model.set(DiagnosticItem::WebServer, model.webAvailable ? DiagnosticState::Ok :
+      webDownloadServer.started() || wifi ? DiagnosticState::Wait : DiagnosticState::Skip,
+      model.webAvailable ? "HTTP port 80" : "Network unavailable");
+  model.set(DiagnosticItem::Speech, speechAvailable ? DiagnosticState::Ok :
+      storageAvailable ? DiagnosticState::Ng : DiagnosticState::Skip,
+      speechAvailable ? "Ready" : "Speech unavailable");
+  model.set(DiagnosticItem::JapaneseFont, japaneseFont.loaded() ? DiagnosticState::Ok :
+      japaneseFontReloadPending ? DiagnosticState::Wait :
+      storageAvailable ? DiagnosticState::Ng : DiagnosticState::Skip,
+      japaneseFont.loaded() ? "Ready" : "Font unavailable");
+  SdCardGuard guard(0);
+  if (!guard.locked()) {
+    model.set(DiagnosticItem::Dictionary, DiagnosticState::Wait, "microSD busy");
+    return;
+  }
+  const bool storage = storageAvailable && SD.cardType() != CARD_NONE;
+  model.set(DiagnosticItem::Storage, storage ? DiagnosticState::Ok : DiagnosticState::Ng);
+  const bool dictionary = storage && SD.exists("/aq_dic/aqdic_m.bin");
+  model.set(DiagnosticItem::Dictionary, dictionary ? DiagnosticState::Ok :
+      storage ? DiagnosticState::Ng : DiagnosticState::Skip,
+      dictionary ? "Ready" : "Dictionary unavailable");
+  const DiagnosticItem sends[] = {DiagnosticItem::Ambient, DiagnosticItem::ThingSpeak};
+  const char* paths[] = {"/ambient_queue.ndjson", "/thingspeak_queue.ndjson"};
+  for (size_t i = 0; i < 2; ++i) {
+    const auto state = model.get(sends[i]).state;
+    snprintf(detail, sizeof(detail), "%s; queue: %s",
+        state == DiagnosticState::Ok ? "Sent" : state == DiagnosticState::Ng ? "Failed" : "Not sent",
+        i == 1 && thingSpeakPublisher.hasPendingRecords() ? "RAM pending" :
+        !storage ? "unavailable" : SD.exists(paths[i]) ? "present" : "none");
+    model.set(sends[i], state, detail);
+  }
+}
 
 struct PendingWeatherLog {
   WeatherData data;
@@ -303,11 +368,8 @@ bool showSplashScreen() {
     delay(10);
   }
 
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(20, 40);
-  M5.Lcd.println("Starting services...");
+  startupDiagnosticsActive = true;
+  drawDiagnosticPage(diagnosticModel, 0, true);
   return settingsRequested;
 }
 
@@ -411,8 +473,7 @@ void processWeatherLogRetry() {
 }
 
 void connectToWiFi() {
-  M5.Lcd.setCursor(20, 100);
-  M5.Lcd.print("Wi-Fi: connecting");
+  updateDiagnostic(DiagnosticItem::Wifi, DiagnosticState::Pending, "Connecting...");
   Serial.printf("Connecting to Wi-Fi SSID: %s\n", WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
@@ -422,33 +483,29 @@ void connectToWiFi() {
   while (WiFi.status() != WL_CONNECTED &&
          millis() - startedAt < WIFI_TIMEOUT_MS) {
     delay(500);
-    M5.Lcd.print(".");
     Serial.print(".");
   }
   Serial.println();
 
-  M5.Lcd.setCursor(20, 130);
   if (WiFi.status() == WL_CONNECTED) {
     const IPAddress ip = WiFi.localIP();
-    M5.Lcd.printf("IP: %s", ip.toString().c_str());
+    snprintf(diagnosticModel.ip, sizeof(diagnosticModel.ip), "%s", ip.toString().c_str());
+    updateDiagnostic(DiagnosticItem::Wifi, DiagnosticState::Ok, "Connected");
     Serial.printf("Wi-Fi connected. IP: %s\n", ip.toString().c_str());
   } else {
-    M5.Lcd.setTextColor(TFT_RED, TFT_BLACK);
-    M5.Lcd.print("Wi-Fi: failed");
-    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    updateDiagnostic(DiagnosticItem::Wifi, DiagnosticState::Ng, "Connection timed out");
     Serial.println("Wi-Fi connection timed out.");
   }
 }
 
 void syncTimeWithNtp() {
-  M5.Lcd.setCursor(20, 160);
   if (WiFi.status() != WL_CONNECTED) {
-    M5.Lcd.print("NTP: skipped");
+    updateDiagnostic(DiagnosticItem::Ntp, DiagnosticState::Skip, "Wi-Fi unavailable");
     Serial.println("NTP sync skipped because Wi-Fi is disconnected.");
     return;
   }
 
-  M5.Lcd.print("NTP: syncing...");
+  updateDiagnostic(DiagnosticItem::Ntp, DiagnosticState::Pending, "Synchronizing...");
   Serial.println("Synchronizing time with NTP...");
   configTime(JST_OFFSET_SECONDS, DAYLIGHT_OFFSET_SECONDS,
              NTP_SERVER_PRIMARY, NTP_SERVER_SECONDARY);
@@ -465,17 +522,16 @@ void syncTimeWithNtp() {
   }
   Serial.println();
 
-  M5.Lcd.setCursor(20, 190);
   if (synchronized) {
     char formattedTime[20];
     strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S",
              &timeInfo);
-    M5.Lcd.printf("JST: %s", formattedTime);
+    strftime(diagnosticModel.synchronizedTime, sizeof(diagnosticModel.synchronizedTime),
+             "%Y.%m.%d %H:%M:%S", &timeInfo);
+    updateDiagnostic(DiagnosticItem::Ntp, DiagnosticState::Ok, "Synchronized");
     Serial.printf("NTP synchronized: %s JST\n", formattedTime);
   } else {
-    M5.Lcd.setTextColor(TFT_RED, TFT_BLACK);
-    M5.Lcd.print("NTP: failed");
-    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    updateDiagnostic(DiagnosticItem::Ntp, DiagnosticState::Ng, "Synchronization timed out");
     Serial.println("NTP synchronization timed out.");
   }
 }
@@ -1417,11 +1473,14 @@ bool fetchCurrentWeather() {
       weather.temperature,
       weather.humidity, weather.pressure, weather.rainLastHour);
   appendWeatherLog(weather, weather.observedAt);
+  updateDiagnostic(DiagnosticItem::Weather, DiagnosticState::Ok);
+  updateDiagnostic(DiagnosticItem::Ambient, DiagnosticState::Pending, "Sending...");
   ambientPublishResult = ambientPublisher.publish(
       weather.observedAt, weather.temperature,
       weather.humidity, weather.pressure, weather.rainLastHour,
       temperatureAlerts.activeThreshold(weather.temperature),
       isRainingCondition(weather.condition), WiFi.RSSI(), weather.conditionId);
+  updateDiagnostic(DiagnosticItem::Ambient, diagnosticPublishState(ambientPublishResult));
   drawMainScreen();
   return true;
 }
@@ -1620,6 +1679,10 @@ bool updateWeather(WeatherRequestSource source,
   logRuntimeMemory("weather update start");
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Weather update skipped because Wi-Fi is disconnected.");
+    updateDiagnostic(DiagnosticItem::Weather, DiagnosticState::Skip, "Wi-Fi unavailable");
+    updateDiagnostic(DiagnosticItem::Forecast, DiagnosticState::Skip, "Wi-Fi unavailable");
+    updateDiagnostic(DiagnosticItem::Ambient, DiagnosticState::Skip, "Weather unavailable");
+    updateDiagnostic(DiagnosticItem::ThingSpeak, DiagnosticState::Skip, "Weather unavailable");
     markForecastRequestFailed();
     drawMainScreen();
     return false;
@@ -1631,11 +1694,18 @@ bool updateWeather(WeatherRequestSource source,
   const bool drawingWasSuppressed = displayDrawingSuppressed;
   if (japaneseFontSuspended) displayDrawingSuppressed = true;
   notificationPlan.reset();
+  updateDiagnostic(DiagnosticItem::Weather, DiagnosticState::Pending, "Fetching...");
+  updateDiagnostic(DiagnosticItem::Ambient, DiagnosticState::Skip, "Weather unavailable");
   const bool currentUpdated = fetchCurrentWeather();
+  updateDiagnostic(DiagnosticItem::Weather,
+      currentUpdated ? DiagnosticState::Ok : DiagnosticState::Ng);
   Serial.printf("Current weather request result: %s.\n",
                 currentUpdated ? "success" : "failed");
   logRuntimeMemory("after current weather and Ambient");
+  updateDiagnostic(DiagnosticItem::Forecast, DiagnosticState::Pending, "Fetching...");
   const bool forecastUpdated = fetchForecast();
+  updateDiagnostic(DiagnosticItem::Forecast,
+      forecastUpdated ? DiagnosticState::Ok : DiagnosticState::Ng);
   Serial.printf("Forecast request result: %s.\n",
                 forecastUpdated ? "success" : "failed");
   logRuntimeMemory("after forecast");
@@ -1651,14 +1721,17 @@ bool updateWeather(WeatherRequestSource source,
   if (currentUpdated && forecastUpdated && weather.valid && forecast.valid &&
       forecast.count > 0) {
     logRuntimeMemory("before ThingSpeak publish");
+    updateDiagnostic(DiagnosticItem::ThingSpeak, DiagnosticState::Pending, "Sending...");
     thingSpeakPublishResult = thingSpeakPublisher.publish(
         weather.observedAt, weather.temperature, weather.humidity,
         weather.pressure, weather.conditionId,
         forecast.entries[0].precipitationProbability,
         temperatureAlerts.activeThreshold(weather.temperature), WiFi.RSSI(),
         rainAlerts.isRainActive());
+    updateDiagnostic(DiagnosticItem::ThingSpeak, diagnosticPublishState(thingSpeakPublishResult));
     logRuntimeMemory("after ThingSpeak publish");
   } else {
+    updateDiagnostic(DiagnosticItem::ThingSpeak, DiagnosticState::Skip, "Weather or forecast unavailable");
     Serial.printf(
         "ThingSpeak publish skipped: current=%s, forecast=%s, "
         "weatherValid=%s, forecastValid=%s, forecastCount=%u.\n",
@@ -1722,7 +1795,15 @@ void setup() {
   const bool settingsRequested = showSplashScreen();
 
   storageAvailable = initializeStorage();
+  updateDiagnostic(DiagnosticItem::Storage,
+      storageAvailable ? DiagnosticState::Ok : DiagnosticState::Ng);
+  const bool dictionaryAvailable = storageAvailable && SD.exists("/aq_dic/aqdic_m.bin");
+  updateDiagnostic(DiagnosticItem::Dictionary, dictionaryAvailable ? DiagnosticState::Ok :
+      storageAvailable ? DiagnosticState::Ng : DiagnosticState::Skip);
+  updateDiagnostic(DiagnosticItem::Speech, DiagnosticState::Pending, "Initializing...");
   speechAvailable = storageAvailable && speech.begin();
+  updateDiagnostic(DiagnosticItem::Speech, speechAvailable ? DiagnosticState::Ok :
+      storageAvailable ? DiagnosticState::Ng : DiagnosticState::Skip);
   temperatureAlerts.begin();
   rainAlerts.begin();
   rainForecastAlerts.begin();
@@ -1730,6 +1811,10 @@ void setup() {
   earthquakeHistory.begin(storageAvailable);
   earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
   webDownloadServer.begin(storageAvailable, &earthquakeHistory);
+  diagnosticModel.webAvailable = webDownloadServer.started();
+  updateDiagnostic(DiagnosticItem::WebServer, webDownloadServer.started() ?
+      DiagnosticState::Ok : DiagnosticState::Skip,
+      webDownloadServer.started() ? "HTTP port 80" : "Wi-Fi unavailable");
   syncTimeWithNtp();
 
   earthquakeService.begin(
@@ -1738,26 +1823,38 @@ void setup() {
           sizeof(EARTHQUAKE_TARGET_PREFECTURES[0]),
       EARTHQUAKE_USE_SANDBOX, EARTHQUAKE_ALLOW_SANDBOX_AUDIO,
       &earthquakeHistory);
+  char p2pDetail[64];
+  const auto p2pState = earthquakeService.connectionState();
+  snprintf(p2pDetail, sizeof(p2pDetail), "%s / %s",
+      EarthquakeService::connectionStateText(p2pState),
+      earthquakeService.usesSandbox() ? "Sandbox" : "Production");
+  updateDiagnostic(DiagnosticItem::P2PQuake, DiagnosticState::Wait, p2pDetail);
 
   displayDrawingSuppressed = true;
-  updateWeather(WeatherRequestSource::Startup, !settingsRequested);
+  updateWeather(WeatherRequestSource::Startup, false);
+
+  updateDiagnostic(DiagnosticItem::JapaneseFont, DiagnosticState::Pending, "Loading...");
+  japaneseFont.begin(storageAvailable);
+  updateDiagnostic(DiagnosticItem::JapaneseFont, japaneseFont.loaded() ? DiagnosticState::Ok :
+      storageAvailable ? DiagnosticState::Ng : DiagnosticState::Skip);
+
+  refreshDiagnostics(diagnosticModel);
+  Serial.println("Startup diagnostic summary:");
+  for (size_t index = 0; index < DiagnosticModel::ITEM_COUNT; ++index) {
+    const auto item = static_cast<DiagnosticItem>(index);
+    const auto& entry = diagnosticModel.get(item);
+    Serial.printf("  %s: %s %s\n", DiagnosticModel::label(item),
+                  diagnosticStateText(entry.state), entry.detail);
+  }
+  for (size_t page = 0; page < DiagnosticModel::PAGE_COUNT; ++page) {
+    drawDiagnosticPage(diagnosticModel, page, true);
+    delay(500);
+  }
+  startupDiagnosticsActive = false;
   displayDrawingSuppressed = false;
 
-  japaneseFont.begin(storageAvailable);
-
   if (settingsRequested) {
-    tm diagnosticTime = {};
-    DiagnosticStatus diagnostics = {};
-    diagnostics.storageAvailable = storageAvailable;
-    diagnostics.dictionaryAvailable =
-        storageAvailable && SD.exists("/aq_dic/aqdic_m.bin");
-    diagnostics.speechAvailable = speechAvailable;
-    diagnostics.japaneseFontAvailable = japaneseFont.loaded();
-    diagnostics.wifiConnected = WiFi.status() == WL_CONNECTED;
-    diagnostics.timeSynchronized = getLocalTime(&diagnosticTime, 10);
-    diagnostics.weatherAvailable = weather.valid;
-    diagnostics.ipAddress = WiFi.localIP();
-    diagnostics.earthquakeService = &earthquakeService;
+    const DiagnosticStatus diagnostics = {diagnosticModel, refreshDiagnostics};
     settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
     clockDisplayPrecision = appSettings.clockPrecision();
     displaySleepEnabled = appSettings.displaySleepEnabled();

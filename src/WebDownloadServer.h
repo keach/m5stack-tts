@@ -15,6 +15,7 @@ class WebDownloadServer {
   void begin(bool storageAvailable,
              EarthquakeHistoryService* earthquakeHistory = nullptr);
   void handleClient();
+  bool started() const { return started_; }
  private:
   void registerRoutes();
   void startIfReady();

@@ -2,6 +2,7 @@
 
 #include "FirmwareInfo.h"
 #include "EarthquakeService.h"
+#include "DiagnosticView.h"
 
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
@@ -296,60 +297,10 @@ void SettingsMode::showMessage(const char* title, const char* detail) {
   }
 }
 
-void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics) {
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
-  M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(88, 8);
-  M5.Lcd.print("DIAGNOSTICS");
-
-  const char* labels[] = {"microSD", "Dictionary", "Speech", "JP font",
-                          "Wi-Fi", "NTP time", "Weather"};
-  const bool values[] = {
-      diagnostics.storageAvailable,    diagnostics.dictionaryAvailable,
-      diagnostics.speechAvailable,     diagnostics.japaneseFontAvailable,
-      diagnostics.wifiConnected,
-      diagnostics.timeSynchronized,    diagnostics.weatherAvailable,
-  };
-
-  M5.Lcd.setTextSize(2);
-  for (int index = 0; index < 7; ++index) {
-    const int y = 38 + index * 20;
-    M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Lcd.setCursor(24, y);
-    M5.Lcd.printf("%-12s", labels[index]);
-    M5.Lcd.setTextColor(values[index] ? TFT_GREEN : TFT_RED, TFT_BLACK);
-    M5.Lcd.setCursor(225, y);
-    M5.Lcd.print(values[index] ? "OK" : "NG");
-  }
-
-  const auto* service = diagnostics.earthquakeService;
-  const auto state = service ? service->connectionState()
-      : EarthquakeService::ConnectionState::NotStarted;
-  const bool connected = state == EarthquakeService::ConnectionState::Connected;
-  const bool unavailable = state == EarthquakeService::ConnectionState::NotStarted;
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setCursor(24, 178);
-  M5.Lcd.print("P2PQuake");
-  M5.Lcd.setTextColor(connected ? TFT_GREEN : unavailable ? TFT_RED : TFT_YELLOW,
-                      TFT_BLACK);
-  M5.Lcd.setCursor(225, 178);
-  M5.Lcd.print(p2pConnectionSummary(state));
-
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  M5.Lcd.setCursor(24, 196);
-  M5.Lcd.printf("%s / %s", EarthquakeService::connectionStateText(state),
-                service && service->usesSandbox() ? "Sandbox" : "Production");
-  M5.Lcd.setCursor(24, 207);
-  M5.Lcd.printf("IP: %s", diagnostics.ipAddress.toString().c_str());
-
-  M5.Lcd.fillRect(0, 218, 320, 22, TFT_NAVY);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(100, 225);
-  M5.Lcd.print("Any button: back");
+void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics,
+                                   size_t page) {
+  diagnostics.update();
+  drawDiagnosticPage(diagnostics.model, page, false);
 }
 
 void SettingsMode::drawFirmwareInfo() {
@@ -386,10 +337,10 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
                                    uint8_t displaySleepMinutes,
                                    uint8_t displayBrightnessPercent) {
   noteDisplayActivity();
-  drawDiagnostics(diagnostics);
-  auto lastState = diagnostics.earthquakeService
-      ? diagnostics.earthquakeService->connectionState()
-      : EarthquakeService::ConnectionState::NotStarted;
+  size_t page = 0;
+  drawDiagnostics(diagnostics, page);
+  unsigned long lastRefresh = millis();
+  DiagnosticModel previous = diagnostics.model;
 
   while (true) {
     M5.update();
@@ -397,7 +348,7 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
         displaySleepEnabled, displaySleepMinutes, displayBrightnessPercent,
         false);
     if (sleepUpdate == DisplaySleepUpdate::Woke) {
-      drawDiagnostics(diagnostics);
+      drawDiagnostics(diagnostics, page);
       delay(10);
       continue;
     }
@@ -405,18 +356,26 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
       delay(10);
       continue;
     }
-    const auto state = diagnostics.earthquakeService
-        ? diagnostics.earthquakeService->connectionState()
-        : EarthquakeService::ConnectionState::NotStarted;
-    if (state != lastState) {
-      lastState = state;
-      drawDiagnostics(diagnostics);
+    if (millis() - lastRefresh >= 1000) {
+      lastRefresh = millis();
+      diagnostics.update();
+      if (!previous.sameAs(diagnostics.model)) {
+        drawDiagnosticPage(diagnostics.model, page, false);
+        previous = diagnostics.model;
+      }
     }
-    if (confirmedPress(M5.BtnA, buttonA_) ||
-        confirmedPress(M5.BtnB, buttonB_) ||
-        confirmedPress(M5.BtnC, buttonC_)) {
+    if (confirmedPress(M5.BtnB, buttonB_)) {
       noteDisplayActivity();
       return;
+    }
+    if (confirmedPress(M5.BtnA, buttonA_)) {
+      page = DiagnosticModel::adjacentPage(page, false);
+      noteDisplayActivity();
+      drawDiagnostics(diagnostics, page);
+    } else if (confirmedPress(M5.BtnC, buttonC_)) {
+      page = DiagnosticModel::adjacentPage(page, true);
+      noteDisplayActivity();
+      drawDiagnostics(diagnostics, page);
     }
     delay(10);
   }

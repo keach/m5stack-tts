@@ -148,7 +148,11 @@ void EarthquakeHistoryReader::advanceCursor(size_t index) {
 }
 
 void EarthquakeHistoryReader::next() {
-  if (status_ != Status::Available || count_ == 0) return;
+  // Keep navigation available after an I/O failure. With a single record,
+  // wrapping also provides an explicit retry without a busy retry loop.
+  if (building_ || count_ == 0 ||
+      (status_ != Status::Available && status_ != Status::Error &&
+       status_ != Status::Busy)) return;
   selected_ = (selected_ + 1) % count_;
   selectionPending_ = true;
   loadSelected();
@@ -174,6 +178,7 @@ void EarthquakeHistoryReader::loadSelected() {
           record.length) {
     if (file) file.close();
     selectionPending_ = false;
+    selectedJson_[0] = '\0';
     setStatus(Status::Error);
     Serial.printf("Selected earthquake history could not be read: %s\n", path);
     return;

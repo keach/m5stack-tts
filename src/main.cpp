@@ -890,6 +890,7 @@ const char* historyScaleText(int scale) {
     case 30: return "3";
     case 40: return "4";
     case 45: return "5 weak";
+    case 46: return "5 weak or more";
     case 50: return "5 strong";
     case 55: return "6 weak";
     case 60: return "6 strong";

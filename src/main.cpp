@@ -928,10 +928,15 @@ void formatHistoryTime(const char* value, bool utc, char* output,
   strftime(output, capacity, "%Y.%m.%d %H:%M:%S", &parsed);
 }
 
-void drawHistoryAscii(int y, const char* text, uint16_t color = TFT_WHITE) {
-  M5.Lcd.setTextSize(1);
+void drawHistoryAscii(int y, const char* text, uint16_t color = TFT_WHITE,
+                      uint8_t size = 2) {
+  M5.Lcd.setTextSize(size);
   M5.Lcd.setTextColor(color, TFT_BLACK);
   String fitted(text);
+  // Preserve long scale descriptions instead of cutting off their qualifier.
+  if (size > 1 && M5.Lcd.textWidth(fitted) > 296) {
+    M5.Lcd.setTextSize(1);
+  }
   while (!fitted.isEmpty() && M5.Lcd.textWidth(fitted) > 296) {
     fitted.remove(fitted.length() - 1);
   }
@@ -950,8 +955,8 @@ void drawHistoryJapanese(int y, const char* text) {
 void drawEarthquakeHistory() {
   M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
   char line[256];
-  snprintf(line, sizeof(line), "HISTORY %s %u / %u",
-           historyDetailShown ? "DETAIL" : "",
+  snprintf(line, sizeof(line), "HISTORY%s %u/%u",
+           historyDetailShown ? " DETAIL" : "",
            earthquakeHistoryReader.count() == 0 ? 0 :
                static_cast<unsigned>(earthquakeHistoryReader.selected() + 1),
            static_cast<unsigned>(earthquakeHistoryReader.count()));
@@ -984,7 +989,7 @@ void drawEarthquakeHistory() {
                (record["test"] | false) ? " TEST" : "",
                (record["cancelled"] | false) ? " CANCEL" : "",
                corrected ? " CORR" : "");
-      drawHistoryAscii(53, line, TFT_ORANGE);
+      drawHistoryAscii(59, line, TFT_ORANGE);
       char eventTime[24], issueTime[24], receivedTime[24];
       formatHistoryTime(record["event_time"] | "", false, eventTime,
                         sizeof(eventTime));
@@ -999,52 +1004,51 @@ void drawEarthquakeHistory() {
       const int scale = eew ? record["max_scale"] | -1
                             : record["target_max_scale"] | -1;
       if (historyDetailShown) {
-        snprintf(line, sizeof(line), "Event:    %s", eventTime);
-        drawHistoryAscii(67, line);
+        snprintf(line, sizeof(line), "Evt: %s", eventTime);
+        drawHistoryAscii(79, line);
         snprintf(line, sizeof(line), "Issued:   %s", issueTime);
-        drawHistoryAscii(81, line);
+        drawHistoryAscii(99, line, TFT_WHITE, 1);
         snprintf(line, sizeof(line), "Received: %s JST", receivedTime);
-        drawHistoryAscii(95, line);
+        drawHistoryAscii(113, line, TFT_WHITE, 1);
         snprintf(line, sizeof(line), "Hypocenter: %s", record["hypocenter"] | "-");
-        drawHistoryJapanese(110, line);
-        snprintf(line, sizeof(line), "M %s  %s scale: %s", magnitudeText,
-                 eew ? "Predicted" : "Local", historyScaleText(scale));
-        drawHistoryAscii(134, line);
+        drawHistoryJapanese(129, line);
+        snprintf(line, sizeof(line), "M %s %s: %s", magnitudeText,
+                 eew ? "Pred" : "Local", historyScaleText(scale));
+        drawHistoryAscii(153, line);
         if (eew) {
           snprintf(line, sizeof(line), "Event ID: %s", record["event_id"] | "-");
-          drawHistoryAscii(148, line);
+          drawHistoryAscii(174, line, TFT_WHITE, 1);
           snprintf(line, sizeof(line), "Report: %d  Target: %s",
                    record["serial"] | 0,
                    (record["target_matched"] | false) ? "Yes" : "No");
-          drawHistoryAscii(162, line);
+          drawHistoryAscii(184, line, TFT_WHITE, 1);
         } else {
           snprintf(line, sizeof(line), "All scale: %s  Type: %s",
                    historyScaleText(record["national_max_scale"] | -1),
                    record["info_type"] | "-");
-          drawHistoryAscii(148, line);
+          drawHistoryAscii(174, line, TFT_WHITE, 1);
           snprintf(line, sizeof(line), "Correction: %s", correction);
-          drawHistoryAscii(162, line);
+          drawHistoryAscii(184, line, TFT_WHITE, 1);
         }
         snprintf(line, sizeof(line), "Areas: %s",
                  eew ? record["target_areas"] | "-"
                      : record["target_prefectures"] | "-");
-        drawHistoryJapanese(183, line);
+        drawHistoryJapanese(194, line);
       } else {
-        snprintf(line, sizeof(line), "%s: %s", eew ? "Issued" : "Event",
+        snprintf(line, sizeof(line), "%s: %s", eew ? "Iss" : "Evt",
                  eew ? issueTime : eventTime);
-        drawHistoryAscii(76, line);
-        snprintf(line, sizeof(line), "Received: %s JST", receivedTime);
-        drawHistoryAscii(94, line);
+        drawHistoryAscii(81, line);
+        snprintf(line, sizeof(line), "Rcv: %s", receivedTime);
+        drawHistoryAscii(103, line);
         snprintf(line, sizeof(line), "Hypocenter: %s", record["hypocenter"] | "-");
-        drawHistoryJapanese(116, line);
-        snprintf(line, sizeof(line), "%s scale: %s   M %s",
-                 eew ? "Predicted" : "Local", historyScaleText(scale),
-                 magnitudeText);
-        drawHistoryAscii(146, line);
+        drawHistoryJapanese(127, line);
+        snprintf(line, sizeof(line), "M %s %s: %s", magnitudeText,
+                 eew ? "Pred" : "Local", historyScaleText(scale));
+        drawHistoryAscii(157, line);
         snprintf(line, sizeof(line), "Areas: %s",
                  eew ? record["target_areas"] | "-"
                      : record["target_prefectures"] | "-");
-        drawHistoryJapanese(171, line);
+        drawHistoryJapanese(187, line);
       }
     }
   }

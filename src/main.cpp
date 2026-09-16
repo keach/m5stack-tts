@@ -1821,7 +1821,7 @@ void setup() {
   earthquakeHistory.begin(storageAvailable);
   earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
   webDownloadServer.begin(storageAvailable, &earthquakeHistory,
-                          &earthquakeService);
+                          &earthquakeService, &speech, &japaneseFont);
   diagnosticModel.webAvailable = webDownloadServer.started();
   updateDiagnostic(DiagnosticItem::WebServer, webDownloadServer.started() ?
       DiagnosticState::Ok : DiagnosticState::Skip,
@@ -1902,6 +1902,12 @@ void loop() {
     }
   }
   webDownloadServer.handleClient();
+  if (webDownloadServer.consumeJapaneseFontReloadPending()) {
+    japaneseFontReloadPending = true;
+    drawingSuppressedBeforeFontSuspend = displayDrawingSuppressed;
+    nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+    Serial.println("Japanese font reload will be retried after web access.");
+  }
   thingSpeakPublisher.handle();
   processWeatherLogRetry();
   temperatureAlerts.processPendingLogs();
@@ -2018,6 +2024,7 @@ void loop() {
   }
   if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
       M5.BtnC.wasPressed()) {
+    japaneseFont.logRenderingState("before button C screen switch");
     noteDisplayActivity();
     buttonAConfirmationPending = false;
     if (mainScreen == MainScreen::CurrentWeather) {
@@ -2036,6 +2043,7 @@ void loop() {
       lastForecastInteraction = millis();
     }
     drawMainScreen();
+    japaneseFont.logRenderingState("after button C screen switch");
   }
 
   const unsigned long now = millis();

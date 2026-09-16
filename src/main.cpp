@@ -15,6 +15,7 @@
 #include "AppSettings.h"
 #include "EarthquakeService.h"
 #include "EarthquakeHistoryService.h"
+#include "EarthquakeHistoryReader.h"
 #include "RainAlertService.h"
 #include "RainForecastAlertService.h"
 #include "RuntimeDiagnostics.h"
@@ -97,6 +98,7 @@ enum class ForecastRequestStatus {
 enum class MainScreen {
   CurrentWeather,
   Forecast,
+  EarthquakeHistory,
 };
 
 enum class DisplayWakeReason {
@@ -126,6 +128,9 @@ ForecastRequestStatus forecastRequestStatus =
     ForecastRequestStatus::NotAttempted;
 MainScreen mainScreen = MainScreen::CurrentWeather;
 unsigned long lastForecastInteraction = 0;
+unsigned long lastHistoryInteraction = 0;
+bool historyDetailShown = false;
+bool historyInterruptedBySeismic = false;
 unsigned long lastWeatherAttempt = 0;
 bool weatherAttempted = false;
 unsigned long lastDisplayUpdate = 0;
@@ -157,6 +162,7 @@ RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
 EarthquakeService earthquakeService;
 EarthquakeHistoryService earthquakeHistory;
+EarthquakeHistoryReader earthquakeHistoryReader;
 
 struct UpdateNotificationPlan {
   bool higherPriorityTriggered = false;
@@ -794,7 +800,7 @@ void drawForecast() {
 
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Lcd.setCursor(16, 230);
-  M5.Lcd.print("A:refresh B:speak/stop C:back");
+  M5.Lcd.print("A:refresh B:speak/stop C:history");
 }
 
 const char* seismicScaleForDisplay(int scale) {
@@ -876,6 +882,184 @@ void drawSeismicEvent() {
   M5.Lcd.print("P2PQuake realtime information");
 }
 
+const char* historyScaleText(int scale) {
+  switch (scale) {
+    case 0: return "0";
+    case 10: return "1";
+    case 20: return "2";
+    case 30: return "3";
+    case 40: return "4";
+    case 45: return "5 weak";
+    case 46: return "5 weak or more";
+    case 50: return "5 strong";
+    case 55: return "6 weak";
+    case 60: return "6 strong";
+    case 70: return "7";
+    case 99: return "5 weak or more";
+    default: return "-";
+  }
+}
+
+void formatHistoryTime(const char* value, bool utc, char* output,
+                       size_t capacity) {
+  tm parsed = {};
+  int year, month, day, hour, minute, second;
+  if (!value || sscanf(value, "%d%*c%d%*c%d%*c%d:%d:%d", &year, &month,
+                        &day, &hour, &minute, &second) != 6) {
+    strlcpy(output, "-", capacity);
+    return;
+  }
+  parsed.tm_year = year - 1900;
+  if (year < 1970 || year > 2100 || month < 1 || month > 12 || day < 1 ||
+      day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
+      second < 0 || second > 59) {
+    strlcpy(output, "-", capacity);
+    return;
+  }
+  parsed.tm_mon = month - 1;
+  parsed.tm_mday = day;
+  parsed.tm_hour = hour;
+  parsed.tm_min = minute;
+  parsed.tm_sec = second;
+  if (utc) {
+    const time_t local = mktime(&parsed) + JST_OFFSET_SECONDS;
+    localtime_r(&local, &parsed);
+  }
+  strftime(output, capacity, "%Y.%m.%d %H:%M:%S", &parsed);
+}
+
+void drawHistoryAscii(int y, const char* text, uint16_t color = TFT_WHITE,
+                      uint8_t size = 2) {
+  M5.Lcd.setTextSize(size);
+  M5.Lcd.setTextColor(color, TFT_BLACK);
+  String fitted(text);
+  // Preserve long scale descriptions instead of cutting off their qualifier.
+  if (size > 1 && M5.Lcd.textWidth(fitted) > 296) {
+    M5.Lcd.setTextSize(1);
+  }
+  while (!fitted.isEmpty() && M5.Lcd.textWidth(fitted) > 296) {
+    fitted.remove(fitted.length() - 1);
+  }
+  M5.Lcd.setCursor(12, y);
+  M5.Lcd.print(fitted);
+}
+
+void drawHistoryJapanese(int y, const char* text) {
+  if (japaneseFont.loaded()) {
+    japaneseFont.drawLineEllipsized(y, text, TFT_WHITE, TFT_BLACK, 12);
+  } else {
+    drawHistoryAscii(y, "JP font unavailable", TFT_YELLOW);
+  }
+}
+
+void drawEarthquakeHistory() {
+  M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
+  char line[256];
+  snprintf(line, sizeof(line), "HISTORY%s %u/%u",
+           historyDetailShown ? " DETAIL" : "",
+           earthquakeHistoryReader.count() == 0 ? 0 :
+               static_cast<unsigned>(earthquakeHistoryReader.selected() + 1),
+           static_cast<unsigned>(earthquakeHistoryReader.count()));
+  drawHistoryAscii(39, line, TFT_CYAN);
+  if (earthquakeHistoryReader.status() !=
+      EarthquakeHistoryReader::Status::Available) {
+    const char* message = "History loading...";
+    switch (earthquakeHistoryReader.status()) {
+      case EarthquakeHistoryReader::Status::Empty:
+        message = "No earthquake history"; break;
+      case EarthquakeHistoryReader::Status::Unavailable:
+        message = "microSD unavailable"; break;
+      case EarthquakeHistoryReader::Status::Busy:
+        message = "History busy"; break;
+      case EarthquakeHistoryReader::Status::Error:
+        message = "History read failed"; break;
+      default: break;
+    }
+    drawHistoryAscii(105, message, TFT_YELLOW);
+  } else {
+    JsonDocument record;
+    if (deserializeJson(record, earthquakeHistoryReader.json())) {
+      drawHistoryAscii(105, "History read failed", TFT_RED);
+    } else {
+      const bool eew = strcmp(record["kind"] | "", "eew") == 0;
+      const char* correction = record["correction"] | "None";
+      const bool corrected = strcmp(correction, "None") != 0 &&
+                             strcmp(correction, "Unknown") != 0;
+      snprintf(line, sizeof(line), "%s%s%s%s", eew ? "EEW" : "QUAKE",
+               (record["test"] | false) ? " TEST" : "",
+               (record["cancelled"] | false) ? " CANCEL" : "",
+               corrected ? " CORR" : "");
+      drawHistoryAscii(59, line, TFT_ORANGE);
+      char eventTime[24], issueTime[24], receivedTime[24];
+      formatHistoryTime(record["event_time"] | "", false, eventTime,
+                        sizeof(eventTime));
+      formatHistoryTime(record["issue_time"] | "", false, issueTime,
+                        sizeof(issueTime));
+      formatHistoryTime(record["received_at"] | "", true, receivedTime,
+                        sizeof(receivedTime));
+      const float magnitude = record["magnitude"] | -1.0F;
+      char magnitudeText[12] = "-";
+      if (magnitude >= 0) snprintf(magnitudeText, sizeof(magnitudeText), "%.1f",
+                                   magnitude);
+      const int scale = eew ? record["max_scale"] | -1
+                            : record["target_max_scale"] | -1;
+      if (historyDetailShown) {
+        snprintf(line, sizeof(line), "Evt: %s", eventTime);
+        drawHistoryAscii(79, line);
+        snprintf(line, sizeof(line), "Issued:   %s", issueTime);
+        drawHistoryAscii(99, line, TFT_WHITE, 1);
+        snprintf(line, sizeof(line), "Received: %s JST", receivedTime);
+        drawHistoryAscii(113, line, TFT_WHITE, 1);
+        snprintf(line, sizeof(line), "Hypocenter: %s", record["hypocenter"] | "-");
+        drawHistoryJapanese(129, line);
+        snprintf(line, sizeof(line), "M %s %s: %s", magnitudeText,
+                 eew ? "Pred" : "Local", historyScaleText(scale));
+        drawHistoryAscii(153, line);
+        if (eew) {
+          snprintf(line, sizeof(line), "Event ID: %s", record["event_id"] | "-");
+          drawHistoryAscii(174, line, TFT_WHITE, 1);
+          snprintf(line, sizeof(line), "Report: %d  Target: %s",
+                   record["serial"] | 0,
+                   (record["target_matched"] | false) ? "Yes" : "No");
+          drawHistoryAscii(184, line, TFT_WHITE, 1);
+        } else {
+          snprintf(line, sizeof(line), "All scale: %s  Type: %s",
+                   historyScaleText(record["national_max_scale"] | -1),
+                   record["info_type"] | "-");
+          drawHistoryAscii(174, line, TFT_WHITE, 1);
+          snprintf(line, sizeof(line), "Correction: %s", correction);
+          drawHistoryAscii(184, line, TFT_WHITE, 1);
+        }
+        snprintf(line, sizeof(line), "Areas: %s",
+                 eew ? record["target_areas"] | "-"
+                     : record["target_prefectures"] | "-");
+        drawHistoryJapanese(194, line);
+      } else {
+        snprintf(line, sizeof(line), "%s: %s", eew ? "Iss" : "Evt",
+                 eew ? issueTime : eventTime);
+        drawHistoryAscii(81, line);
+        snprintf(line, sizeof(line), "Rcv: %s", receivedTime);
+        drawHistoryAscii(103, line);
+        snprintf(line, sizeof(line), "Hypocenter: %s", record["hypocenter"] | "-");
+        drawHistoryJapanese(127, line);
+        snprintf(line, sizeof(line), "M %s %s: %s", magnitudeText,
+                 eew ? "Pred" : "Local", historyScaleText(scale));
+        drawHistoryAscii(157, line);
+        snprintf(line, sizeof(line), "Areas: %s",
+                 eew ? record["target_areas"] | "-"
+                     : record["target_prefectures"] | "-");
+        drawHistoryJapanese(187, line);
+      }
+    }
+  }
+  M5.Lcd.fillRect(0, 218, 320, 22, TFT_NAVY);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
+  M5.Lcd.setCursor(24, 225);
+  M5.Lcd.print(historyDetailShown ? "Any button: back to history"
+                                 : "A:older  B:details  C:weather");
+}
+
 void drawMainScreen() {
   if (displaySleeping || displayDrawingSuppressed) {
     return;
@@ -886,6 +1070,8 @@ void drawMainScreen() {
   }
   if (mainScreen == MainScreen::Forecast) {
     drawForecast();
+  } else if (mainScreen == MainScreen::EarthquakeHistory) {
+    drawEarthquakeHistory();
   } else {
     drawWeather();
   }
@@ -911,6 +1097,10 @@ const char* displayWakeReasonName(DisplayWakeReason reason) {
 
 void wakeDisplay(DisplayWakeReason reason) {
   noteDisplayActivity();
+  if (reason == DisplayWakeReason::Button &&
+      mainScreen == MainScreen::EarthquakeHistory) {
+    lastHistoryInteraction = millis();
+  }
   displayWakeConfirmationPending = false;
   if (displaySleeping) {
     M5.Lcd.wakeup();
@@ -1538,6 +1728,7 @@ void setup() {
   rainForecastAlerts.begin();
   connectToWiFi();
   earthquakeHistory.begin(storageAvailable);
+  earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
   webDownloadServer.begin(storageAvailable, &earthquakeHistory);
   syncTimeWithNtp();
 
@@ -1586,6 +1777,20 @@ void loop() {
   retryJapaneseFontReload();
   earthquakeService.loop();
   earthquakeHistory.loop();
+  if (mainScreen == MainScreen::EarthquakeHistory) {
+    if (earthquakeService.active()) {
+      historyInterruptedBySeismic = true;
+    } else if (historyInterruptedBySeismic) {
+      historyInterruptedBySeismic = false;
+      historyDetailShown = false;
+      lastHistoryInteraction = millis();
+      earthquakeHistoryReader.refresh();
+    }
+    if (!earthquakeService.active()) {
+      earthquakeHistoryReader.loop();
+      if (earthquakeHistoryReader.consumeChanged()) drawMainScreen();
+    }
+  }
   webDownloadServer.handleClient();
   thingSpeakPublisher.handle();
   processWeatherLogRetry();
@@ -1638,13 +1843,26 @@ void loop() {
   runScheduledForecastSpeech();
 
   const bool seismicDisplayActive = earthquakeService.active();
+  if (seismicDisplayActive) buttonAConfirmationPending = false;
   if (seismicDisplayActive &&
       (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed())) {
     noteDisplayActivity();
     buttonAConfirmationPending = false;
     Serial.println("Button press ignored while seismic information is shown.");
   }
-  if (!displaySleeping && !seismicDisplayActive && M5.BtnA.wasPressed()) {
+  const bool historyDetailReturned = !displaySleeping &&
+      !seismicDisplayActive && mainScreen == MainScreen::EarthquakeHistory &&
+      historyDetailShown &&
+      (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed());
+  if (historyDetailReturned) {
+    historyDetailShown = false;
+    buttonAConfirmationPending = false;
+    lastHistoryInteraction = millis();
+    noteDisplayActivity();
+    drawMainScreen();
+  }
+  if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
+      M5.BtnA.wasPressed()) {
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
     Serial.printf("Button A signal detected (raw pin: %d).\n",
@@ -1661,24 +1879,49 @@ void loop() {
       if (mainScreen == MainScreen::Forecast) {
         lastForecastInteraction = millis();
       }
-      updateWeather(WeatherRequestSource::ManualButton);
+      if (mainScreen == MainScreen::EarthquakeHistory) {
+        lastHistoryInteraction = millis();
+        earthquakeHistoryReader.next();
+        drawMainScreen();
+      } else {
+        updateWeather(WeatherRequestSource::ManualButton);
+      }
     }
   }
   if (scheduledForecastStopButtonConsumed) {
     scheduledForecastStopButtonConsumed = false;
-  } else if (!displaySleeping && !seismicDisplayActive &&
+  } else if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
              M5.BtnB.wasPressed()) {
     noteDisplayActivity();
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }
-    toggleScreenSpeech();
+    if (mainScreen == MainScreen::EarthquakeHistory) {
+      lastHistoryInteraction = millis();
+      historyDetailShown = earthquakeHistoryReader.status() ==
+          EarthquakeHistoryReader::Status::Available;
+      buttonAConfirmationPending = false;
+      drawMainScreen();
+    } else {
+      toggleScreenSpeech();
+    }
   }
-  if (!displaySleeping && !seismicDisplayActive && M5.BtnC.wasPressed()) {
+  if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
+      M5.BtnC.wasPressed()) {
     noteDisplayActivity();
-    mainScreen = mainScreen == MainScreen::CurrentWeather
-                     ? MainScreen::Forecast
-                     : MainScreen::CurrentWeather;
+    buttonAConfirmationPending = false;
+    if (mainScreen == MainScreen::CurrentWeather) {
+      mainScreen = MainScreen::Forecast;
+    } else if (mainScreen == MainScreen::Forecast) {
+      mainScreen = MainScreen::EarthquakeHistory;
+      historyDetailShown = false;
+      historyInterruptedBySeismic = false;
+      lastHistoryInteraction = millis();
+      earthquakeHistoryReader.refresh();
+    } else {
+      mainScreen = MainScreen::CurrentWeather;
+      earthquakeHistoryReader.close();
+    }
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
     }
@@ -1693,6 +1936,15 @@ void loop() {
       now - lastForecastInteraction >= FORECAST_SCREEN_TIMEOUT_MS) {
     mainScreen = MainScreen::CurrentWeather;
     Serial.println("Forecast screen timed out; returning to current weather.");
+    drawMainScreen();
+  }
+  if (mainScreen == MainScreen::EarthquakeHistory && !displaySleeping &&
+      !seismicDisplayActive &&
+      millis() - lastHistoryInteraction >= FORECAST_SCREEN_TIMEOUT_MS) {
+    mainScreen = MainScreen::CurrentWeather;
+    historyDetailShown = false;
+    earthquakeHistoryReader.close();
+    Serial.println("History screen timed out; returning to current weather.");
     drawMainScreen();
   }
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL_MS) {

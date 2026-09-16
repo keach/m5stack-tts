@@ -4,6 +4,7 @@
 #include <SD.h>
 
 #include "SdCardLock.h"
+#include "ReverseNdjsonLine.h"
 
 namespace {
 constexpr char EEW_PREFIX[] = "eew_history_";
@@ -425,49 +426,33 @@ size_t EarthquakeHistoryService::appendLatestRowsFromFileLocked(
     file.close();
     return 0;
   }
-  char reversed[MAX_RECORD_BYTES] = {};
-  size_t length = 0;
+  ReverseNdjsonLine<MAX_RECORD_BYTES> reverse;
+  char line[MAX_RECORD_BYTES] = {};
   size_t rows = 0;
   size_t position = size;
   if (!file.seek(size - 1)) {
     file.close();
     return 0;
   }
-  const bool endsWithNewline = file.read() == '\n';
-  bool discardIncompleteTail = !endsWithNewline;
+  reverse.reset(file.read() == '\n');
+  bool readFailed = false;
   uint8_t buffer[256];
   while (position > 0 && rows < maximumRows) {
     const size_t chunk = min(position, sizeof(buffer));
     position -= chunk;
-    if (!file.seek(position) || file.read(buffer, chunk) != chunk) break;
+    if (!file.seek(position) || file.read(buffer, chunk) != chunk) {
+      readFailed = true;
+      break;
+    }
     for (size_t offset = chunk; offset > 0 && rows < maximumRows; --offset) {
       const char value = static_cast<char>(buffer[offset - 1]);
-      if (value == '\n') {
-        if (discardIncompleteTail) {
-          length = 0;
-          discardIncompleteTail = false;
-          continue;
-        }
-        if (length == 0) continue;
-        char line[MAX_RECORD_BYTES] = {};
-        for (size_t index = 0; index < length; ++index) {
-          line[index] = reversed[length - index - 1];
-        }
+      if (reverse.consume(value, line)) {
         if (appendRecordRow(html, kind, line)) ++rows;
-        length = 0;
-      } else if (length + 1 < sizeof(reversed)) {
-        reversed[length++] = value;
-      } else {
-        length = 0;
       }
     }
   }
-  if (!discardIncompleteTail && rows < maximumRows && length > 0 &&
-      position == 0) {
-    char line[MAX_RECORD_BYTES] = {};
-    for (size_t index = 0; index < length; ++index) {
-      line[index] = reversed[length - index - 1];
-    }
+  if (!readFailed && rows < maximumRows && position == 0 &&
+      reverse.finish(line)) {
     if (appendRecordRow(html, kind, line)) ++rows;
   }
   file.close();

@@ -1747,16 +1747,17 @@ void setup() {
 
   if (settingsRequested) {
     tm diagnosticTime = {};
-    const DiagnosticStatus diagnostics = {
-        storageAvailable,
-        storageAvailable && SD.exists("/aq_dic/aqdic_m.bin"),
-        speechAvailable,
-        japaneseFont.loaded(),
-        WiFi.status() == WL_CONNECTED,
-        getLocalTime(&diagnosticTime, 10),
-        weather.valid,
-        WiFi.localIP(),
-    };
+    DiagnosticStatus diagnostics = {};
+    diagnostics.storageAvailable = storageAvailable;
+    diagnostics.dictionaryAvailable =
+        storageAvailable && SD.exists("/aq_dic/aqdic_m.bin");
+    diagnostics.speechAvailable = speechAvailable;
+    diagnostics.japaneseFontAvailable = japaneseFont.loaded();
+    diagnostics.wifiConnected = WiFi.status() == WL_CONNECTED;
+    diagnostics.timeSynchronized = getLocalTime(&diagnosticTime, 10);
+    diagnostics.weatherAvailable = weather.valid;
+    diagnostics.ipAddress = WiFi.localIP();
+    diagnostics.earthquakeService = &earthquakeService;
     settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
     clockDisplayPrecision = appSettings.clockPrecision();
     displaySleepEnabled = appSettings.displaySleepEnabled();

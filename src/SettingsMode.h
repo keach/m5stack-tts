@@ -6,6 +6,8 @@
 #include "AppSettings.h"
 #include "SpeechService.h"
 
+class EarthquakeService;
+
 struct DiagnosticStatus {
   bool storageAvailable;
   bool dictionaryAvailable;
@@ -15,6 +17,7 @@ struct DiagnosticStatus {
   bool weatherAvailable;
   bool japaneseFontAvailable;
   IPAddress ipAddress;
+  const EarthquakeService* earthquakeService = nullptr;
 };
 
 class SettingsMode {

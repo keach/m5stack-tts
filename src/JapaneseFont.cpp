@@ -89,6 +89,15 @@ bool JapaneseFont::begin(bool storageAvailable) {
     return false;
   }
   lineSprite_.loadFont(FONT_NAME, SD);
+  if (!lineSprite_.fontLoaded || !lineSprite_.fontFile) {
+    Serial.println("Japanese font load failed.");
+    lineSprite_.unloadFont();
+    lineSprite_.deleteSprite();
+    free(glyphCodes_);
+    glyphCodes_ = nullptr;
+    glyphCount_ = 0;
+    return false;
+  }
   loadTimeMs_ = millis() - startedAt;
   const uint32_t heapAfter = ESP.getFreeHeap();
   heapUsed_ = heapBefore > heapAfter ? heapBefore - heapAfter : 0;
@@ -152,6 +161,12 @@ bool JapaneseFont::resumeAfterNetworkRequest() {
     return false;
   }
   lineSprite_.loadFont(FONT_NAME, SD);
+  if (!lineSprite_.fontLoaded || !lineSprite_.fontFile) {
+    loaded_ = false;
+    suspended_ = true;
+    Serial.println("Japanese font reload failed.");
+    return false;
+  }
   loaded_ = true;
   suspended_ = false;
   Serial.println("Japanese font reloaded after HTTPS requests.");

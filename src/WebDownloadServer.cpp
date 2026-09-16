@@ -33,11 +33,10 @@ class P2PQuakeNetworkGuard {
                        japaneseFont_->suspendForNetworkRequest()) {}
 
   ~P2PQuakeNetworkGuard() {
-    if (!paused_) return;
     if (fontSuspended_ && !japaneseFont_->resumeAfterNetworkRequest()) {
       *fontReloadPending_ = true;
     }
-    earthquakeService_->resumeAfterNetworkRequest();
+    if (paused_) earthquakeService_->resumeAfterNetworkRequest();
   }
 
  private:

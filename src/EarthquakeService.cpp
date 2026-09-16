@@ -234,6 +234,7 @@ void EarthquakeService::begin(const char* const* targetPrefectures,
   webSocket_.setReconnectInterval(0xffffffffUL);
   webSocket_.enableHeartbeat(15000, 5000, 2);
   started_ = true;
+  setConnectionState(connectionState());
   reconnectAt_ = millis();
   Serial.printf("P2PQuake service ready (%s, %u target prefecture(s)).\n",
                 useSandbox_ ? "sandbox" : "production",
@@ -242,6 +243,14 @@ void EarthquakeService::begin(const char* const* targetPrefectures,
 
 void EarthquakeService::loop() {
   if (!started_) return;
+  // An error is transient; the next loop resumes the existing connection or
+  // reconnect wait. The transition log retains the failure for diagnosis.
+  if (connectionState_ == ConnectionState::Error) {
+    setConnectionState(resolveP2PConnectionState(
+        started_, paused_, WiFi.status() == WL_CONNECTED,
+        connected_, connecting_, false));
+  }
+  setConnectionState(connectionState());
   if (paused_) {
     expireEvents();
     return;
@@ -250,6 +259,7 @@ void EarthquakeService::loop() {
     if (connected_) webSocket_.disconnect();
     connected_ = false;
     connecting_ = false;
+    setConnectionState(ConnectionState::WaitingWifi);
     expireEvents();
     return;
   }
@@ -261,6 +271,7 @@ void EarthquakeService::loop() {
   if (connecting_ && !connected_ &&
       millis() - connectStartedAt_ >= CONNECT_TIMEOUT_MS) {
     Serial.println("P2PQuake WebSocket connection timed out.");
+    setConnectionState(ConnectionState::Error);
     connecting_ = false;
     webSocket_.setReconnectInterval(0xffffffffUL);
     scheduleReconnect();
@@ -272,6 +283,7 @@ bool EarthquakeService::pauseForNetworkRequest() {
   if (!started_ || paused_ || (!connected_ && !connecting_)) return false;
   Serial.println("Pausing P2PQuake WebSocket for HTTPS requests.");
   paused_ = true;
+  setConnectionState(ConnectionState::Paused);
   webSocket_.disconnect();
   connected_ = false;
   connecting_ = false;
@@ -282,6 +294,7 @@ bool EarthquakeService::pauseForNetworkRequest() {
 void EarthquakeService::resumeAfterNetworkRequest() {
   if (!started_ || !paused_) return;
   paused_ = false;
+  setConnectionState(connectionState());
   reconnectStep_ = 0;
   reconnectAt_ = millis();
   Serial.println("P2PQuake WebSocket resume requested.");
@@ -290,6 +303,24 @@ void EarthquakeService::resumeAfterNetworkRequest() {
 
 bool EarthquakeService::active() const {
   return selectedType_ != SeismicEventType::None;
+}
+
+EarthquakeService::ConnectionState EarthquakeService::connectionState() const {
+  return resolveP2PConnectionState(
+      started_, paused_, WiFi.status() == WL_CONNECTED, connected_, connecting_,
+      connectionState_ == ConnectionState::Error);
+}
+
+const char* EarthquakeService::connectionStateText(ConnectionState state) {
+  return p2pConnectionStateText(state);
+}
+
+void EarthquakeService::setConnectionState(ConnectionState state) {
+  if (connectionState_ == state) return;
+  Serial.printf("P2PQuake state [%s]: %s -> %s\n",
+                useSandbox_ ? "Sandbox" : "Production",
+                connectionStateText(connectionState_), connectionStateText(state));
+  connectionState_ = state;
 }
 
 const SeismicEvent& EarthquakeService::current() const {
@@ -327,6 +358,7 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
     case WStype_CONNECTED:
       connected_ = true;
       connecting_ = false;
+      setConnectionState(ConnectionState::Connected);
       reconnectStep_ = 0;
       Serial.printf("P2PQuake WebSocket connected: %s\n", payload);
       logRuntimeMemory("P2PQuake connected");
@@ -343,6 +375,7 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
       processMessage(payload, length);
       break;
     case WStype_ERROR:
+      setConnectionState(ConnectionState::Error);
       Serial.println("P2PQuake WebSocket error.");
       logRuntimeMemory("P2PQuake error");
       break;
@@ -720,6 +753,9 @@ void EarthquakeService::expireEvents() {
 }
 
 void EarthquakeService::scheduleReconnect() {
+  setConnectionState(resolveP2PConnectionState(
+      started_, paused_, WiFi.status() == WL_CONNECTED,
+      connected_, connecting_, false));
   const size_t delayIndex =
       min(static_cast<size_t>(reconnectStep_),
           sizeof(RECONNECT_DELAYS_MS) / sizeof(RECONNECT_DELAYS_MS[0]) - 1);
@@ -736,6 +772,7 @@ void EarthquakeService::connect() {
                 WEB_SOCKET_PATH);
   logRuntimeMemory("P2PQuake before beginSSL");
   connecting_ = true;
+  setConnectionState(ConnectionState::Connecting);
   connectStartedAt_ = millis();
   webSocket_.beginSSL(host, WEB_SOCKET_PORT, WEB_SOCKET_PATH);
   webSocket_.setReconnectInterval(0);

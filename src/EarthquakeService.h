@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WebSocketsClient.h>
+#include "P2PConnectionStatus.h"
 
 class EarthquakeHistoryService;
 
@@ -38,6 +39,10 @@ struct SeismicEvent {
 
 class EarthquakeService {
  public:
+  using ConnectionState = P2PConnectionState;
+  ConnectionState connectionState() const;
+  bool usesSandbox() const { return useSandbox_; }
+  static const char* connectionStateText(ConnectionState state);
   void begin(const char* const* targetPrefectures, size_t targetCount,
              bool useSandbox, bool allowSandboxAudio,
              EarthquakeHistoryService* historyService = nullptr);
@@ -74,6 +79,7 @@ class EarthquakeService {
   void expireEvents();
   void scheduleReconnect();
   void connect();
+  void setConnectionState(ConnectionState state);
 
   WebSocketsClient webSocket_;
   Preferences preferences_;
@@ -92,6 +98,7 @@ class EarthquakeService {
   bool connecting_ = false;
   bool paused_ = false;
   bool started_ = false;
+  ConnectionState connectionState_ = ConnectionState::NotStarted;
   bool displayChanged_ = false;
   SeismicSoundType soundRequested_ = SeismicSoundType::None;
   bool wakeRequested_ = false;

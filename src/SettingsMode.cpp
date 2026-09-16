@@ -1,6 +1,7 @@
 #include "SettingsMode.h"
 
 #include "FirmwareInfo.h"
+#include "EarthquakeService.h"
 
 namespace {
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
@@ -314,7 +315,7 @@ void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics) {
 
   M5.Lcd.setTextSize(2);
   for (int index = 0; index < 7; ++index) {
-    const int y = 40 + index * 24;
+    const int y = 38 + index * 20;
     M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
     M5.Lcd.setCursor(24, y);
     M5.Lcd.printf("%-12s", labels[index]);
@@ -323,8 +324,24 @@ void SettingsMode::drawDiagnostics(const DiagnosticStatus& diagnostics) {
     M5.Lcd.print(values[index] ? "OK" : "NG");
   }
 
+  const auto* service = diagnostics.earthquakeService;
+  const auto state = service ? service->connectionState()
+      : EarthquakeService::ConnectionState::NotStarted;
+  const bool connected = state == EarthquakeService::ConnectionState::Connected;
+  const bool unavailable = state == EarthquakeService::ConnectionState::NotStarted;
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setCursor(24, 178);
+  M5.Lcd.print("P2PQuake");
+  M5.Lcd.setTextColor(connected ? TFT_GREEN : unavailable ? TFT_RED : TFT_YELLOW,
+                      TFT_BLACK);
+  M5.Lcd.setCursor(225, 178);
+  M5.Lcd.print(p2pConnectionSummary(state));
+
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(24, 196);
+  M5.Lcd.printf("%s / %s", EarthquakeService::connectionStateText(state),
+                service && service->usesSandbox() ? "Sandbox" : "Production");
   M5.Lcd.setCursor(24, 207);
   M5.Lcd.printf("IP: %s", diagnostics.ipAddress.toString().c_str());
 
@@ -370,6 +387,9 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
                                    uint8_t displayBrightnessPercent) {
   noteDisplayActivity();
   drawDiagnostics(diagnostics);
+  auto lastState = diagnostics.earthquakeService
+      ? diagnostics.earthquakeService->connectionState()
+      : EarthquakeService::ConnectionState::NotStarted;
 
   while (true) {
     M5.update();
@@ -384,6 +404,13 @@ void SettingsMode::showDiagnostics(const DiagnosticStatus& diagnostics,
     if (sleepUpdate == DisplaySleepUpdate::Sleeping) {
       delay(10);
       continue;
+    }
+    const auto state = diagnostics.earthquakeService
+        ? diagnostics.earthquakeService->connectionState()
+        : EarthquakeService::ConnectionState::NotStarted;
+    if (state != lastState) {
+      lastState = state;
+      drawDiagnostics(diagnostics);
     }
     if (confirmedPress(M5.BtnA, buttonA_) ||
         confirmedPress(M5.BtnB, buttonB_) ||

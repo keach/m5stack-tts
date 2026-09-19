@@ -89,6 +89,15 @@ bool JapaneseFont::begin(bool storageAvailable) {
     return false;
   }
   lineSprite_.loadFont(FONT_NAME, SD);
+  if (!lineSprite_.fontLoaded || !lineSprite_.fontFile) {
+    Serial.println("Japanese font load failed.");
+    lineSprite_.unloadFont();
+    lineSprite_.deleteSprite();
+    free(glyphCodes_);
+    glyphCodes_ = nullptr;
+    glyphCount_ = 0;
+    return false;
+  }
   loadTimeMs_ = millis() - startedAt;
   const uint32_t heapAfter = ESP.getFreeHeap();
   heapUsed_ = heapBefore > heapAfter ? heapBefore - heapAfter : 0;
@@ -152,6 +161,12 @@ bool JapaneseFont::resumeAfterNetworkRequest() {
     return false;
   }
   lineSprite_.loadFont(FONT_NAME, SD);
+  if (!lineSprite_.fontLoaded || !lineSprite_.fontFile) {
+    loaded_ = false;
+    suspended_ = true;
+    Serial.println("Japanese font reload failed.");
+    return false;
+  }
   loaded_ = true;
   suspended_ = false;
   Serial.println("Japanese font reloaded after HTTPS requests.");
@@ -165,6 +180,17 @@ bool JapaneseFont::hasGlyph(uint32_t codePoint) const {
     if (glyphCodes_[index] == codePoint) return true;
   }
   return false;
+}
+
+void JapaneseFont::logRenderingState(const char* stage) const {
+  Serial.printf(
+      "Japanese font state [%s]: available=%s, loaded=%s, suspended=%s, "
+      "spriteFont=%s, fontFile=%s, glyphs=%u.\n",
+      stage, available_ ? "yes" : "no", loaded_ ? "yes" : "no",
+      suspended_ ? "yes" : "no", lineSprite_.fontLoaded ? "yes" : "no",
+      lineSprite_.fontFile ? "open" : "closed",
+      static_cast<unsigned>(glyphCount_));
+  logHeapIntegrity(stage);
 }
 
 String JapaneseFont::sanitize(const char* text) const {

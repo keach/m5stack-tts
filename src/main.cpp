@@ -139,6 +139,7 @@ unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
 bool japaneseFontReloadPending = false;
+bool speechWasActive = false;
 bool drawingSuppressedBeforeFontSuspend = false;
 unsigned long nextJapaneseFontReloadAttempt = 0;
 bool displaySleepEnabled = AppSettings::DEFAULT_DISPLAY_SLEEP_ENABLED;
@@ -1774,6 +1775,15 @@ void retryJapaneseFontReload() {
   drawDateTime();
   drawMainScreen();
 }
+
+void logSpeechFontTransition() {
+  const bool speaking = speech.isSpeaking();
+  if (speaking == speechWasActive) return;
+  speechWasActive = speaking;
+  const char* stage = speaking ? "speech started" : "speech ended";
+  Serial.printf("Speech transition: %s.\n", stage);
+  japaneseFont.logRenderingState(stage);
+}
 }  // namespace
 
 void setup() {
@@ -1810,7 +1820,7 @@ void setup() {
   connectToWiFi();
   earthquakeHistory.begin(storageAvailable);
   earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
-  webDownloadServer.begin(storageAvailable, &earthquakeHistory);
+  webDownloadServer.begin(storageAvailable, &earthquakeHistory, &speech);
   diagnosticModel.webAvailable = webDownloadServer.started();
   updateDiagnostic(DiagnosticItem::WebServer, webDownloadServer.started() ?
       DiagnosticState::Ok : DiagnosticState::Skip,
@@ -1873,6 +1883,7 @@ void setup() {
 void loop() {
   M5.update();
   retryJapaneseFontReload();
+  logSpeechFontTransition();
   earthquakeService.loop();
   earthquakeHistory.loop();
   if (mainScreen == MainScreen::EarthquakeHistory) {
@@ -2006,6 +2017,7 @@ void loop() {
   }
   if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
       M5.BtnC.wasPressed()) {
+    japaneseFont.logRenderingState("before button C screen switch");
     noteDisplayActivity();
     buttonAConfirmationPending = false;
     if (mainScreen == MainScreen::CurrentWeather) {
@@ -2024,6 +2036,7 @@ void loop() {
       lastForecastInteraction = millis();
     }
     drawMainScreen();
+    japaneseFont.logRenderingState("after button C screen switch");
   }
 
   const unsigned long now = millis();

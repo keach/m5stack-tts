@@ -12,6 +12,7 @@ class JapaneseFont {
   size_t fileSize() const { return fileSize_; }
   uint32_t heapUsed() const { return heapUsed_; }
   uint32_t loadTimeMs() const { return loadTimeMs_; }
+  void logRenderingState(const char* stage) const;
   void drawLine(int16_t y, const char* text, uint16_t foreground,
                 uint16_t background, int16_t x = 16);
   void drawLineEllipsized(int16_t y, const char* text, uint16_t foreground,

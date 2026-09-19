@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include "EarthquakeHistoryService.h"
 #include "SdCardLock.h"
+#include "SpeechService.h"
 
 namespace {
 constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
@@ -15,12 +16,15 @@ constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
     {"Rain forecast alerts", "/rain_forecast_alerts.csv", "/download/rain-forecast-alerts", "text/csv; charset=utf-8", "rain_forecast_alerts.csv"},
 };
 constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);
+
 }
 
 void WebDownloadServer::begin(
-    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory) {
+    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory,
+    SpeechService* speechService) {
   storageAvailable_ = storageAvailable;
   earthquakeHistory_ = earthquakeHistory;
+  speechService_ = speechService;
   registerRoutes();
   startIfReady();
 }
@@ -48,12 +52,19 @@ void WebDownloadServer::handleClient() {
   startIfReady();
   if (started_ && WiFi.status() == WL_CONNECTED) server_.handleClient();
 }
+bool WebDownloadServer::sendSpeechBusy() {
+  if (!speechService_ || !speechService_->isSpeaking()) return false;
+  server_.send(503, "text/plain; charset=utf-8", "Speech in progress. Retry shortly.");
+  return true;
+}
 void WebDownloadServer::sendText(int status, const char* message) {
+  if (sendSpeechBusy()) return;
   server_.sendHeader("X-Content-Type-Options", "nosniff");
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(status, "text/plain; charset=utf-8", message);
 }
 void WebDownloadServer::sendIndex() {
+  if (sendSpeechBusy()) return;
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -80,6 +91,7 @@ void WebDownloadServer::sendIndex() {
   server_.send(200, "text/html; charset=utf-8", html);
 }
 void WebDownloadServer::sendDownload(const DownloadFile& download) {
+  if (sendSpeechBusy()) return;
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -95,6 +107,7 @@ void WebDownloadServer::sendDownload(const DownloadFile& download) {
 }
 
 void WebDownloadServer::sendEarthquakeHistoryDownload() {
+  if (sendSpeechBusy()) return;
   if (!storageAvailable_ || !earthquakeHistory_) {
     sendText(503, "Earthquake history is unavailable");
     return;

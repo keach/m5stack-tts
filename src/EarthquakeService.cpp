@@ -347,6 +347,16 @@ bool EarthquakeService::consumeWakeRequested() {
   return requested;
 }
 
+bool EarthquakeService::consumeSpeechEvent(SeismicEvent* event) {
+  if (!event || speechEventCount_ == 0) return false;
+  *event = speechEvents_[0];
+  for (size_t index = 1; index < speechEventCount_; ++index) {
+    speechEvents_[index - 1] = speechEvents_[index];
+  }
+  --speechEventCount_;
+  return true;
+}
+
 void EarthquakeService::eventThunk(WStype_t type, uint8_t* payload,
                                    size_t length) {
   if (instance_) instance_->onWebSocketEvent(type, payload, length);
@@ -457,6 +467,7 @@ void EarthquakeService::processEew(JsonDocument& document) {
                   document["issue"]["time"] | document["time"] | "");
   updated.serial = serial;
   updated.maxScale = document["earthquake"]["maxScale"] | -1;
+  updated.nationalMaxScale = updated.maxScale;
   updated.magnitude = document["earthquake"]["hypocenter"]["magnitude"] |
                       document["earthquake"]["magnitude"] | -1.0F;
   updated.cancelled = document["cancelled"] | false;
@@ -518,8 +529,10 @@ void EarthquakeService::processEew(JsonDocument& document) {
   // tone; non-target events use one short tone. A later target match may still
   // play the dedicated tone after an earlier non-target update.
   wakeRequested_ = true;
-  const bool audioAllowed =
-      !updated.test || (useSandbox_ && allowSandboxAudio_);
+  const bool audioAllowed = !updated.test || allowSandboxAudio_;
+  if (audioAllowed) {
+    enqueueSpeechEvent(updated);
+  }
   if (audioAllowed && !updated.cancelled) {
     if (updated.targetMatched &&
         strcmp(lastWarnedEewEventId_, eventId) != 0) {
@@ -556,10 +569,13 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
   updated.test = useSandbox_;
   updated.receivedAt = millis();
   const int overallMaxScale = document["earthquake"]["maxScale"] | -1;
+  updated.nationalMaxScale = overallMaxScale;
+  updated.corrected = document["issue"]["correct"] | false;
   char logicalKey[128] = {};
   snprintf(logicalKey, sizeof(logicalKey), "%s|%s",
            document["earthquake"]["time"] | document["time"] | "",
            updated.hypocenter);
+  copyText(updated.logicalKey, sizeof(updated.logicalKey), logicalKey);
 
   size_t matchedCount = 0;
   const JsonArray points = document["points"].as<JsonArray>();
@@ -596,8 +612,10 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
   }
   if (updated.targetMatched) {
     wakeRequested_ = true;
-    const bool audioAllowed =
-        !updated.test || (useSandbox_ && allowSandboxAudio_);
+    const bool audioAllowed = !updated.test || allowSandboxAudio_;
+    if (audioAllowed) {
+      enqueueSpeechEvent(updated);
+    }
     if (audioAllowed && strcmp(lastSoundedEarthquakeKey_, logicalKey) != 0) {
       if (soundRequested_ == SeismicSoundType::None) {
         soundRequested_ = SeismicSoundType::Short;
@@ -611,6 +629,25 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
                 scaleText(updated.maxScale), updated.targetAreas,
                 updated.test ? " test" : "");
   selectCurrentEvent();
+}
+
+void EarthquakeService::enqueueSpeechEvent(const SeismicEvent& event) {
+  if (speechEventCount_ == MAX_SPEECH_EVENT_COUNT) {
+    for (size_t index = 0; index < speechEventCount_; ++index) {
+      if (speechEvents_[index].type == SeismicEventType::Earthquake) {
+        for (size_t next = index + 1; next < speechEventCount_; ++next) {
+          speechEvents_[next - 1] = speechEvents_[next];
+        }
+        --speechEventCount_;
+        break;
+      }
+    }
+  }
+  if (speechEventCount_ == MAX_SPEECH_EVENT_COUNT) {
+    Serial.println("Earthquake speech event queue full; event dropped.");
+    return;
+  }
+  speechEvents_[speechEventCount_++] = event;
 }
 
 void EarthquakeService::enqueueEewHistory(JsonDocument& document,

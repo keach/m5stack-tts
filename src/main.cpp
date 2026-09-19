@@ -14,6 +14,7 @@
 #include "AmbientPublisher.h"
 #include "AppSettings.h"
 #include "EarthquakeService.h"
+#include "EarthquakeSpeechService.h"
 #include "EarthquakeHistoryService.h"
 #include "EarthquakeHistoryReader.h"
 #include "RainAlertService.h"
@@ -163,6 +164,7 @@ TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
 EarthquakeService earthquakeService;
+EarthquakeSpeechService earthquakeSpeech;
 EarthquakeHistoryService earthquakeHistory;
 EarthquakeHistoryReader earthquakeHistoryReader;
 
@@ -1171,6 +1173,29 @@ void wakeDisplay(DisplayWakeReason reason) {
   drawMainScreen();
 }
 
+void processSeismicAudio() {
+  if (earthquakeService.consumeWakeRequested()) {
+    wakeDisplay(DisplayWakeReason::Notification);
+  }
+  const SeismicSoundType seismicSound =
+      earthquakeService.consumeSoundRequested();
+  if (seismicSound != SeismicSoundType::None) {
+    if (speechAvailable) {
+      speech.playAlertTone(180,
+                           seismicSound == SeismicSoundType::EewWarning ? 3 : 1);
+    } else {
+      Serial.println("Seismic alert tone skipped because audio is unavailable.");
+    }
+  }
+  SeismicEvent seismicSpeechEvent;
+  while (earthquakeService.consumeSpeechEvent(&seismicSpeechEvent)) {
+    earthquakeSpeech.enqueue(seismicSpeechEvent);
+  }
+  if (speechAvailable) {
+    earthquakeSpeech.loop(speech);
+  }
+}
+
 void sleepDisplay() {
   if (displaySleeping) {
     return;
@@ -1294,6 +1319,12 @@ void speakForecast() {
 
     while (speech.isSpeaking()) {
       M5.update();
+      earthquakeService.loop();
+      processSeismicAudio();
+      if (earthquakeSpeech.activeOrPending()) {
+        Serial.println("Forecast speech interrupted by earthquake speech.");
+        return;
+      }
       if (M5.BtnB.wasPressed()) {
         lastForecastInteraction = millis();
         speech.stop();
@@ -1315,7 +1346,7 @@ uint32_t localDateKey(const tm& localTime) {
 }
 
 void runScheduledForecastSpeech() {
-  if (earthquakeService.active()) {
+  if (earthquakeService.active() || earthquakeSpeech.activeOrPending()) {
     return;
   }
   tm localTime = {};
@@ -1364,6 +1395,10 @@ void runScheduledForecastSpeech() {
 }
 
 void toggleScreenSpeech() {
+  if (earthquakeSpeech.activeOrPending()) {
+    Serial.println("Screen speech deferred while earthquake speech is active.");
+    return;
+  }
   if (speech.isSpeaking()) {
     speech.stop();
     return;
@@ -1781,6 +1816,9 @@ void logSpeechFontTransition() {
   if (speaking == speechWasActive) return;
   speechWasActive = speaking;
   const char* stage = speaking ? "speech started" : "speech ended";
+  if (!speaking) {
+    noteDisplayActivity();
+  }
   Serial.printf("Speech transition: %s.\n", stage);
   japaneseFont.logRenderingState(stage);
 }
@@ -1802,6 +1840,8 @@ void setup() {
       AppSettings::displayBrightnessLevel(displayBrightnessPercent));
   noteDisplayActivity();
   speech.setVolumePercent(appSettings.volumePercent());
+  earthquakeSpeech.begin(appSettings.eewSpeechEnabled(),
+                         appSettings.earthquakeSpeechEnabled());
   const bool settingsRequested = showSplashScreen();
 
   storageAvailable = initializeStorage();
@@ -1873,6 +1913,8 @@ void setup() {
     M5.Lcd.setBrightness(
         AppSettings::displayBrightnessLevel(displayBrightnessPercent));
     speech.setVolumePercent(appSettings.volumePercent());
+    earthquakeSpeech.setEnabled(appSettings.eewSpeechEnabled(),
+                               appSettings.earthquakeSpeechEnabled());
     noteDisplayActivity();
   }
 
@@ -1907,19 +1949,7 @@ void loop() {
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
 
-  if (earthquakeService.consumeWakeRequested()) {
-    wakeDisplay(DisplayWakeReason::Notification);
-  }
-  const SeismicSoundType seismicSound =
-      earthquakeService.consumeSoundRequested();
-  if (seismicSound != SeismicSoundType::None) {
-    if (speechAvailable) {
-      speech.playAlertTone(180,
-                           seismicSound == SeismicSoundType::EewWarning ? 3 : 1);
-    } else {
-      Serial.println("Seismic alert tone skipped because audio is unavailable.");
-    }
-  }
+  processSeismicAudio();
   if (earthquakeService.consumeDisplayChanged()) {
     drawDateTime();
     drawMainScreen();
@@ -2062,7 +2092,8 @@ void loop() {
     lastDisplayUpdate = now;
     drawDateTime();
   }
-  if (displaySleepEnabled && !displaySleeping &&
+  if (displaySleepEnabled && !displaySleeping && !speech.isSpeaking() &&
+      !earthquakeSpeech.activeOrPending() &&
       now - lastDisplayActivity >= displaySleepTimeoutMs()) {
     sleepDisplay();
   }

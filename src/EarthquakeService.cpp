@@ -466,7 +466,6 @@ void EarthquakeService::processEew(JsonDocument& document) {
   copyDisplayTime(updated.eventTime, sizeof(updated.eventTime),
                   document["issue"]["time"] | document["time"] | "");
   updated.serial = serial;
-  updated.eewFollowUp = serial > 1;
   updated.maxScale = document["earthquake"]["maxScale"] | -1;
   updated.nationalMaxScale = updated.maxScale;
   updated.magnitude = document["earthquake"]["hypocenter"]["magnitude"] |

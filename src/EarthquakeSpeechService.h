@@ -26,6 +26,7 @@ class EarthquakeSpeechService {
   struct Request {
     RequestKind kind = RequestKind::Earthquake;
     uint8_t priority = 0;
+    bool eewInitialPending = false;
     SeismicEvent event;
     char signature[192] = {};
     char message[512] = {};

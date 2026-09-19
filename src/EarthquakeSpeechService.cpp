@@ -118,6 +118,7 @@ bool EarthquakeSpeechService::buildEewRequest(const SeismicEvent& event,
 
   request->kind = RequestKind::Eew;
   request->priority = event.cancelled ? PRIORITY_EEW_CANCEL : PRIORITY_EEW;
+  request->eewInitialPending = strcmp(lastEewEventId_, event.eventId) != 0;
   request->event = event;
   snprintf(request->signature, sizeof(request->signature),
            "%d|%d|%d|%.1f|%s|%s", event.cancelled, event.targetMatched,
@@ -218,7 +219,11 @@ void EarthquakeSpeechService::enqueueRequest(const Request& request) {
         queued.kind == RequestKind::Earthquake &&
         strcmp(request.event.logicalKey, queued.event.logicalKey) == 0;
     if (sameEew || sameEarthquake) {
+      const bool retainEewInitialPending = queued.eewInitialPending;
       queued = request;
+      if (sameEew) {
+        queued.eewInitialPending = retainEewInitialPending;
+      }
       return;
     }
   }
@@ -235,7 +240,7 @@ void EarthquakeSpeechService::enqueueRequest(const Request& request) {
       for (size_t index = 0; index < queueCount_; ++index) {
         if (queue_[index].kind == RequestKind::Eew &&
             !queue_[index].event.cancelled &&
-            queue_[index].event.eewFollowUp) {
+            !queue_[index].eewInitialPending) {
           removeIndex = index;
           break;
         }

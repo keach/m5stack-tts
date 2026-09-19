@@ -30,10 +30,13 @@ struct SeismicEvent {
   char eventTime[20] = {};
   int serial = 0;
   int maxScale = -1;
+  int nationalMaxScale = -1;
   float magnitude = -1.0F;
   bool cancelled = false;
+  bool corrected = false;
   bool test = false;
   bool targetMatched = false;
+  char logicalKey[128] = {};
   unsigned long receivedAt = 0;
 };
 
@@ -54,10 +57,12 @@ class EarthquakeService {
   bool consumeDisplayChanged();
   SeismicSoundType consumeSoundRequested();
   bool consumeWakeRequested();
+  bool consumeSpeechEvent(SeismicEvent* event);
 
  private:
   static constexpr size_t MAX_TARGET_PREFECTURES = 8;
   static constexpr size_t RECENT_ID_COUNT = 8;
+  static constexpr size_t MAX_SPEECH_EVENT_COUNT = 4;
 
   static void eventThunk(WStype_t type, uint8_t* payload, size_t length);
   void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
@@ -69,6 +74,7 @@ class EarthquakeService {
                                 const SeismicEvent& event,
                                 int nationalMaxScale,
                                 const char* logicalKey);
+  void enqueueSpeechEvent(const SeismicEvent& event);
   bool isDuplicateId(const char* id) const;
   void rememberId(const char* id);
   bool isTargetPrefecture(const char* prefecture) const;
@@ -111,6 +117,8 @@ class EarthquakeService {
   char lastShortEewEventId_[40] = {};
   char lastSoundedEarthquakeKey_[128] = {};
   int lastEewSerial_ = 0;
+  SeismicEvent speechEvents_[MAX_SPEECH_EVENT_COUNT];
+  size_t speechEventCount_ = 0;
 
   static EarthquakeService* instance_;
 };

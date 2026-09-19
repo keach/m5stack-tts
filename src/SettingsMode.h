@@ -31,6 +31,7 @@ class SettingsMode {
                 uint8_t volumePercent, bool displaySleepEnabled,
                 uint8_t displaySleepMinutes,
                 uint8_t displayBrightnessPercent,
+                bool eewSpeechEnabled, bool earthquakeSpeechEnabled,
                 const AppSettings::ForecastSchedule* forecastSchedules);
   void showDiagnostics(const DiagnosticStatus& diagnostics,
                        bool displaySleepEnabled, uint8_t displaySleepMinutes,

@@ -18,6 +18,8 @@ class EarthquakeSpeechService {
   bool activeOrPending() const;
 
  private:
+  static constexpr size_t MAX_EEW_STATE_COUNT = MAX_QUEUE_SIZE;
+
   enum class RequestKind : uint8_t {
     Eew,
     Earthquake,
@@ -32,14 +34,19 @@ class EarthquakeSpeechService {
     char message[512] = {};
   };
 
+  struct EewState {
+    char eventId[40] = {};
+    char signature[192] = {};
+  };
+
   bool eewEnabled_ = true;
   bool earthquakeEnabled_ = true;
   bool active_ = false;
   Preferences preferences_;
   Request queue_[MAX_QUEUE_SIZE];
   size_t queueCount_ = 0;
-  char lastEewEventId_[40] = {};
-  char lastEewSignature_[192] = {};
+  EewState eewStates_[MAX_EEW_STATE_COUNT];
+  size_t eewStateCount_ = 0;
   char lastEarthquakeKey_[128] = {};
   char lastEarthquakeSignature_[192] = {};
 
@@ -52,6 +59,9 @@ class EarthquakeSpeechService {
   void removeAt(size_t index);
   size_t highestPriorityIndex() const;
   void rememberStarted(const Request& request);
+  bool hasEewStarted(const char* eventId) const;
+  size_t findEewState(const char* eventId) const;
+  void rememberEewStarted(const Request& request);
   static const char* scaleText(int scale);
   static void appendTestPrefix(const SeismicEvent& event, char* message,
                                size_t capacity);

@@ -1820,8 +1820,7 @@ void setup() {
   connectToWiFi();
   earthquakeHistory.begin(storageAvailable);
   earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
-  webDownloadServer.begin(storageAvailable, &earthquakeHistory,
-                          &earthquakeService, &speech, &japaneseFont);
+  webDownloadServer.begin(storageAvailable, &earthquakeHistory, &speech);
   diagnosticModel.webAvailable = webDownloadServer.started();
   updateDiagnostic(DiagnosticItem::WebServer, webDownloadServer.started() ?
       DiagnosticState::Ok : DiagnosticState::Skip,
@@ -1902,12 +1901,6 @@ void loop() {
     }
   }
   webDownloadServer.handleClient();
-  if (webDownloadServer.consumeJapaneseFontReloadPending()) {
-    japaneseFontReloadPending = true;
-    drawingSuppressedBeforeFontSuspend = displayDrawingSuppressed;
-    nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
-    Serial.println("Japanese font reload will be retried after web access.");
-  }
   thingSpeakPublisher.handle();
   processWeatherLogRetry();
   temperatureAlerts.processPendingLogs();

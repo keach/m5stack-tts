@@ -3,10 +3,8 @@
 #include <SD.h>
 #include <WiFi.h>
 #include "EarthquakeHistoryService.h"
-#include "EarthquakeService.h"
 #include "SdCardLock.h"
 #include "SpeechService.h"
-#include "JapaneseFont.h"
 
 namespace {
 constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
@@ -19,44 +17,14 @@ constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
 };
 constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);
 
-class P2PQuakeNetworkGuard {
- public:
-  explicit P2PQuakeNetworkGuard(EarthquakeService* earthquakeService,
-                                JapaneseFont* japaneseFont,
-                                bool* fontReloadPending)
-      : earthquakeService_(earthquakeService),
-        japaneseFont_(japaneseFont),
-        fontReloadPending_(fontReloadPending),
-        paused_(earthquakeService_ &&
-                earthquakeService_->pauseForNetworkRequest()),
-        fontSuspended_(japaneseFont_ &&
-                       japaneseFont_->suspendForNetworkRequest()) {}
-
-  ~P2PQuakeNetworkGuard() {
-    if (fontSuspended_ && !japaneseFont_->resumeAfterNetworkRequest()) {
-      *fontReloadPending_ = true;
-    }
-    if (paused_) earthquakeService_->resumeAfterNetworkRequest();
-  }
-
- private:
-  EarthquakeService* earthquakeService_;
-  JapaneseFont* japaneseFont_;
-  bool* fontReloadPending_;
-  bool paused_;
-  bool fontSuspended_;
-};
 }
 
 void WebDownloadServer::begin(
     bool storageAvailable, EarthquakeHistoryService* earthquakeHistory,
-    EarthquakeService* earthquakeService, SpeechService* speechService,
-    JapaneseFont* japaneseFont) {
+    SpeechService* speechService) {
   storageAvailable_ = storageAvailable;
   earthquakeHistory_ = earthquakeHistory;
-  earthquakeService_ = earthquakeService;
   speechService_ = speechService;
-  japaneseFont_ = japaneseFont;
   registerRoutes();
   startIfReady();
 }
@@ -84,11 +52,6 @@ void WebDownloadServer::handleClient() {
   startIfReady();
   if (started_ && WiFi.status() == WL_CONNECTED) server_.handleClient();
 }
-bool WebDownloadServer::consumeJapaneseFontReloadPending() {
-  const bool pending = japaneseFontReloadPending_;
-  japaneseFontReloadPending_ = false;
-  return pending;
-}
 bool WebDownloadServer::sendSpeechBusy() {
   if (!speechService_ || !speechService_->isSpeaking()) return false;
   server_.send(503, "text/plain; charset=utf-8", "Speech in progress. Retry shortly.");
@@ -96,16 +59,12 @@ bool WebDownloadServer::sendSpeechBusy() {
 }
 void WebDownloadServer::sendText(int status, const char* message) {
   if (sendSpeechBusy()) return;
-  P2PQuakeNetworkGuard networkGuard(earthquakeService_, japaneseFont_,
-                                    &japaneseFontReloadPending_);
   server_.sendHeader("X-Content-Type-Options", "nosniff");
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(status, "text/plain; charset=utf-8", message);
 }
 void WebDownloadServer::sendIndex() {
   if (sendSpeechBusy()) return;
-  P2PQuakeNetworkGuard networkGuard(earthquakeService_, japaneseFont_,
-                                    &japaneseFontReloadPending_);
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -133,8 +92,6 @@ void WebDownloadServer::sendIndex() {
 }
 void WebDownloadServer::sendDownload(const DownloadFile& download) {
   if (sendSpeechBusy()) return;
-  P2PQuakeNetworkGuard networkGuard(earthquakeService_, japaneseFont_,
-                                    &japaneseFontReloadPending_);
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -151,8 +108,6 @@ void WebDownloadServer::sendDownload(const DownloadFile& download) {
 
 void WebDownloadServer::sendEarthquakeHistoryDownload() {
   if (sendSpeechBusy()) return;
-  P2PQuakeNetworkGuard networkGuard(earthquakeService_, japaneseFont_,
-                                    &japaneseFontReloadPending_);
   if (!storageAvailable_ || !earthquakeHistory_) {
     sendText(503, "Earthquake history is unavailable");
     return;

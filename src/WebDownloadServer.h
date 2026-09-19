@@ -2,9 +2,7 @@
 #include <WebServer.h>
 
 class EarthquakeHistoryService;
-class EarthquakeService;
 class SpeechService;
-class JapaneseFont;
 
 class WebDownloadServer {
  public:
@@ -17,11 +15,8 @@ class WebDownloadServer {
   };
   void begin(bool storageAvailable,
              EarthquakeHistoryService* earthquakeHistory = nullptr,
-             EarthquakeService* earthquakeService = nullptr,
-             SpeechService* speechService = nullptr,
-             JapaneseFont* japaneseFont = nullptr);
+             SpeechService* speechService = nullptr);
   void handleClient();
-  bool consumeJapaneseFontReloadPending();
   bool started() const { return started_; }
  private:
   void registerRoutes();
@@ -36,8 +31,5 @@ class WebDownloadServer {
   bool routesRegistered_ = false;
   bool started_ = false;
   EarthquakeHistoryService* earthquakeHistory_ = nullptr;
-  EarthquakeService* earthquakeService_ = nullptr;
   SpeechService* speechService_ = nullptr;
-  JapaneseFont* japaneseFont_ = nullptr;
-  bool japaneseFontReloadPending_ = false;
 };

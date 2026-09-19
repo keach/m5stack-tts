@@ -233,7 +233,9 @@ void EarthquakeSpeechService::enqueueRequest(const Request& request) {
     }
     if (removeIndex == MAX_QUEUE_SIZE) {
       for (size_t index = 0; index < queueCount_; ++index) {
-        if (queue_[index].priority != PRIORITY_EEW_CANCEL) {
+        if (queue_[index].kind == RequestKind::Eew &&
+            !queue_[index].event.cancelled &&
+            queue_[index].event.eewFollowUp) {
           removeIndex = index;
           break;
         }

@@ -29,6 +29,7 @@ struct SeismicEvent {
   char matchedAreas[192] = {};
   char eventTime[20] = {};
   int serial = 0;
+  bool eewFollowUp = false;
   int maxScale = -1;
   int nationalMaxScale = -1;
   float magnitude = -1.0F;

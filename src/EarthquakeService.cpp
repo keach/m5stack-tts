@@ -466,6 +466,7 @@ void EarthquakeService::processEew(JsonDocument& document) {
   copyDisplayTime(updated.eventTime, sizeof(updated.eventTime),
                   document["issue"]["time"] | document["time"] | "");
   updated.serial = serial;
+  updated.eewFollowUp = serial > 1;
   updated.maxScale = document["earthquake"]["maxScale"] | -1;
   updated.nationalMaxScale = updated.maxScale;
   updated.magnitude = document["earthquake"]["hypocenter"]["magnitude"] |
@@ -570,7 +571,9 @@ void EarthquakeService::processEarthquake(JsonDocument& document) {
   updated.receivedAt = millis();
   const int overallMaxScale = document["earthquake"]["maxScale"] | -1;
   updated.nationalMaxScale = overallMaxScale;
-  updated.corrected = document["issue"]["correct"] | false;
+  const char* correction = document["issue"]["correct"] | "None";
+  updated.corrected = strcmp(correction, "None") != 0 &&
+                      strcmp(correction, "Unknown") != 0;
   char logicalKey[128] = {};
   snprintf(logicalKey, sizeof(logicalKey), "%s|%s",
            document["earthquake"]["time"] | document["time"] | "",

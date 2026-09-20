@@ -14,6 +14,8 @@ enum MenuItem {
   MENU_DISPLAY_SLEEP,
   MENU_DISPLAY_SLEEP_TIMEOUT,
   MENU_DISPLAY_BRIGHTNESS,
+  MENU_EEW_SPEECH,
+  MENU_EARTHQUAKE_SPEECH,
   MENU_FORECAST_1_ENABLED,
   MENU_FORECAST_1_HOUR,
   MENU_FORECAST_1_MINUTE,
@@ -34,6 +36,7 @@ constexpr int MENU_ITEM_COUNT = MENU_SAVE_AND_EXIT + 1;
 constexpr MenuItem MENU_ROW_ITEMS[] = {
     MENU_CLOCK,              MENU_VOLUME,          MENU_DISPLAY_SLEEP,
     MENU_DISPLAY_SLEEP_TIMEOUT, MENU_DISPLAY_BRIGHTNESS,
+    MENU_EEW_SPEECH,         MENU_EARTHQUAKE_SPEECH,
     MENU_FORECAST_1_ENABLED,
     MENU_FORECAST_2_ENABLED, MENU_FORECAST_3_ENABLED,
     MENU_ALARM_TEST,         MENU_SPEECH_TEST,     MENU_DIAGNOSTICS,
@@ -161,6 +164,8 @@ void SettingsMode::drawMenu(int selectedItem,
                             bool displaySleepEnabled,
                             uint8_t displaySleepMinutes,
                             uint8_t displayBrightnessPercent,
+                            bool eewSpeechEnabled,
+                            bool earthquakeSpeechEnabled,
                             const AppSettings::ForecastSchedule*
                                 forecastSchedules) {
   M5.Lcd.fillScreen(TFT_BLACK);
@@ -214,6 +219,13 @@ void SettingsMode::drawMenu(int selectedItem,
         break;
       case MENU_DISPLAY_BRIGHTNESS:
         M5.Lcd.printf("Brightness: %u%%", displayBrightnessPercent);
+        break;
+      case MENU_EEW_SPEECH:
+        M5.Lcd.printf("EEW speech: %s", eewSpeechEnabled ? "On" : "Off");
+        break;
+      case MENU_EARTHQUAKE_SPEECH:
+        M5.Lcd.printf("Quake speech: %s",
+                      earthquakeSpeechEnabled ? "On" : "Off");
         break;
       case MENU_FORECAST_1_ENABLED:
       case MENU_FORECAST_2_ENABLED:
@@ -420,6 +432,8 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
   uint8_t draftDisplaySleepMinutes = settings.displaySleepMinutes();
   uint8_t draftDisplayBrightnessPercent =
       settings.displayBrightnessPercent();
+  bool draftEewSpeechEnabled = settings.eewSpeechEnabled();
+  bool draftEarthquakeSpeechEnabled = settings.earthquakeSpeechEnabled();
   AppSettings::ForecastSchedule
       draftForecastSchedules[AppSettings::FORECAST_SCHEDULE_COUNT];
   for (size_t index = 0; index < AppSettings::FORECAST_SCHEDULE_COUNT;
@@ -436,7 +450,8 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
       AppSettings::displayBrightnessLevel(draftDisplayBrightnessPercent));
   drawMenu(selectedItem, draftClockPrecision, draftVolume,
            draftDisplaySleepEnabled, draftDisplaySleepMinutes,
-           draftDisplayBrightnessPercent,
+           draftDisplayBrightnessPercent, draftEewSpeechEnabled,
+           draftEarthquakeSpeechEnabled,
            draftForecastSchedules);
   bool speechWasActive = speech.isSpeaking();
 
@@ -453,7 +468,8 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
     if (sleepUpdate == DisplaySleepUpdate::Woke) {
       drawMenu(selectedItem, draftClockPrecision, draftVolume,
                draftDisplaySleepEnabled, draftDisplaySleepMinutes,
-               draftDisplayBrightnessPercent, draftForecastSchedules);
+               draftDisplayBrightnessPercent, draftEewSpeechEnabled,
+               draftEarthquakeSpeechEnabled, draftForecastSchedules);
       delay(10);
       continue;
     }
@@ -475,7 +491,8 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
                          : (selectedItem + 1) % MENU_ITEM_COUNT;
       drawMenu(selectedItem, draftClockPrecision, draftVolume,
                draftDisplaySleepEnabled, draftDisplaySleepMinutes,
-               draftDisplayBrightnessPercent,
+               draftDisplayBrightnessPercent, draftEewSpeechEnabled,
+               draftEarthquakeSpeechEnabled,
                draftForecastSchedules);
     }
 
@@ -513,6 +530,12 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
                   : draftDisplayBrightnessPercent + 20;
           M5.Lcd.setBrightness(AppSettings::displayBrightnessLevel(
               draftDisplayBrightnessPercent));
+          break;
+        case MENU_EEW_SPEECH:
+          draftEewSpeechEnabled = !draftEewSpeechEnabled;
+          break;
+        case MENU_EARTHQUAKE_SPEECH:
+          draftEarthquakeSpeechEnabled = !draftEarthquakeSpeechEnabled;
           break;
         case MENU_FORECAST_1_ENABLED:
         case MENU_FORECAST_1_HOUR:
@@ -574,14 +597,16 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
           disableDuplicateForecastSchedules(draftForecastSchedules);
           settings.save(draftClockPrecision, draftVolume,
                         draftDisplaySleepEnabled, draftDisplaySleepMinutes,
-                        draftDisplayBrightnessPercent,
+                        draftDisplayBrightnessPercent, draftEewSpeechEnabled,
+                        draftEarthquakeSpeechEnabled,
                         draftForecastSchedules);
           showMessage("SETTINGS SAVED", "Returning to weather");
           return;
       }
       drawMenu(selectedItem, draftClockPrecision, draftVolume,
                draftDisplaySleepEnabled, draftDisplaySleepMinutes,
-               draftDisplayBrightnessPercent,
+               draftDisplayBrightnessPercent, draftEewSpeechEnabled,
+               draftEarthquakeSpeechEnabled,
                draftForecastSchedules);
     }
 

@@ -14,6 +14,7 @@
 #include "AmbientPublisher.h"
 #include "AppSettings.h"
 #include "EarthquakeService.h"
+#include "EarthquakeSpeechService.h"
 #include "EarthquakeHistoryService.h"
 #include "EarthquakeHistoryReader.h"
 #include "RainAlertService.h"
@@ -139,8 +140,10 @@ unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
 bool japaneseFontReloadPending = false;
+bool japaneseFontSuspendedForP2P = false;
 bool speechWasActive = false;
 bool drawingSuppressedBeforeFontSuspend = false;
+bool drawingSuppressedBeforeP2PFontSuspend = false;
 unsigned long nextJapaneseFontReloadAttempt = 0;
 bool displaySleepEnabled = AppSettings::DEFAULT_DISPLAY_SLEEP_ENABLED;
 uint8_t displaySleepMinutes = AppSettings::DEFAULT_DISPLAY_SLEEP_MINUTES;
@@ -163,6 +166,7 @@ TemperatureAlertService temperatureAlerts;
 RainAlertService rainAlerts;
 RainForecastAlertService rainForecastAlerts;
 EarthquakeService earthquakeService;
+EarthquakeSpeechService earthquakeSpeech;
 EarthquakeHistoryService earthquakeHistory;
 EarthquakeHistoryReader earthquakeHistoryReader;
 
@@ -1171,6 +1175,29 @@ void wakeDisplay(DisplayWakeReason reason) {
   drawMainScreen();
 }
 
+void processSeismicAudio() {
+  if (earthquakeService.consumeWakeRequested()) {
+    wakeDisplay(DisplayWakeReason::Notification);
+  }
+  const SeismicSoundType seismicSound =
+      earthquakeService.consumeSoundRequested();
+  if (seismicSound != SeismicSoundType::None) {
+    if (speechAvailable) {
+      speech.playAlertTone(180,
+                           seismicSound == SeismicSoundType::EewWarning ? 3 : 1);
+    } else {
+      Serial.println("Seismic alert tone skipped because audio is unavailable.");
+    }
+  }
+  SeismicEvent seismicSpeechEvent;
+  while (earthquakeService.consumeSpeechEvent(&seismicSpeechEvent)) {
+    earthquakeSpeech.enqueue(seismicSpeechEvent);
+  }
+  if (speechAvailable) {
+    earthquakeSpeech.loop(speech);
+  }
+}
+
 void sleepDisplay() {
   if (displaySleeping) {
     return;
@@ -1294,6 +1321,12 @@ void speakForecast() {
 
     while (speech.isSpeaking()) {
       M5.update();
+      earthquakeService.loop();
+      processSeismicAudio();
+      if (earthquakeSpeech.activeOrPending()) {
+        Serial.println("Forecast speech interrupted by earthquake speech.");
+        return;
+      }
       if (M5.BtnB.wasPressed()) {
         lastForecastInteraction = millis();
         speech.stop();
@@ -1315,7 +1348,7 @@ uint32_t localDateKey(const tm& localTime) {
 }
 
 void runScheduledForecastSpeech() {
-  if (earthquakeService.active()) {
+  if (earthquakeService.active() || earthquakeSpeech.activeOrPending()) {
     return;
   }
   tm localTime = {};
@@ -1364,6 +1397,10 @@ void runScheduledForecastSpeech() {
 }
 
 void toggleScreenSpeech() {
+  if (earthquakeSpeech.activeOrPending()) {
+    Serial.println("Screen speech deferred while earthquake speech is active.");
+    return;
+  }
   if (speech.isSpeaking()) {
     speech.stop();
     return;
@@ -1776,11 +1813,48 @@ void retryJapaneseFontReload() {
   drawMainScreen();
 }
 
+void prepareJapaneseFontForP2PConnection() {
+  if (japaneseFontSuspendedForP2P ||
+      !earthquakeService.connectionAttemptDue()) {
+    return;
+  }
+  if (!japaneseFont.suspendForNetworkRequest()) return;
+  japaneseFontSuspendedForP2P = true;
+  drawingSuppressedBeforeP2PFontSuspend = displayDrawingSuppressed;
+  displayDrawingSuppressed = true;
+  Serial.println("Japanese font suspended for P2PQuake TLS connection.");
+  logRuntimeMemory("P2PQuake font suspended");
+}
+
+void restoreJapaneseFontAfterP2PConnection() {
+  if (!japaneseFontSuspendedForP2P ||
+      earthquakeService.connectionState() ==
+          EarthquakeService::ConnectionState::Connecting) {
+    return;
+  }
+  japaneseFontSuspendedForP2P = false;
+  if (!japaneseFont.resumeAfterNetworkRequest()) {
+    japaneseFontReloadPending = true;
+    drawingSuppressedBeforeFontSuspend =
+        drawingSuppressedBeforeP2PFontSuspend;
+    nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+    Serial.println("Japanese font reload deferred after P2PQuake TLS connection.");
+    return;
+  }
+  displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
+  Serial.println("Japanese font reloaded after P2PQuake TLS connection.");
+  drawDateTime();
+  drawMainScreen();
+}
+
 void logSpeechFontTransition() {
   const bool speaking = speech.isSpeaking();
   if (speaking == speechWasActive) return;
   speechWasActive = speaking;
   const char* stage = speaking ? "speech started" : "speech ended";
+  if (!speaking) {
+    noteDisplayActivity();
+  }
   Serial.printf("Speech transition: %s.\n", stage);
   japaneseFont.logRenderingState(stage);
 }
@@ -1802,6 +1876,8 @@ void setup() {
       AppSettings::displayBrightnessLevel(displayBrightnessPercent));
   noteDisplayActivity();
   speech.setVolumePercent(appSettings.volumePercent());
+  earthquakeSpeech.begin(appSettings.eewSpeechEnabled(),
+                         appSettings.earthquakeSpeechEnabled());
   const bool settingsRequested = showSplashScreen();
 
   storageAvailable = initializeStorage();
@@ -1873,6 +1949,8 @@ void setup() {
     M5.Lcd.setBrightness(
         AppSettings::displayBrightnessLevel(displayBrightnessPercent));
     speech.setVolumePercent(appSettings.volumePercent());
+    earthquakeSpeech.setEnabled(appSettings.eewSpeechEnabled(),
+                               appSettings.earthquakeSpeechEnabled());
     noteDisplayActivity();
   }
 
@@ -1884,7 +1962,9 @@ void loop() {
   M5.update();
   retryJapaneseFontReload();
   logSpeechFontTransition();
+  prepareJapaneseFontForP2PConnection();
   earthquakeService.loop();
+  restoreJapaneseFontAfterP2PConnection();
   earthquakeHistory.loop();
   if (mainScreen == MainScreen::EarthquakeHistory) {
     if (earthquakeService.active()) {
@@ -1907,19 +1987,7 @@ void loop() {
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
 
-  if (earthquakeService.consumeWakeRequested()) {
-    wakeDisplay(DisplayWakeReason::Notification);
-  }
-  const SeismicSoundType seismicSound =
-      earthquakeService.consumeSoundRequested();
-  if (seismicSound != SeismicSoundType::None) {
-    if (speechAvailable) {
-      speech.playAlertTone(180,
-                           seismicSound == SeismicSoundType::EewWarning ? 3 : 1);
-    } else {
-      Serial.println("Seismic alert tone skipped because audio is unavailable.");
-    }
-  }
+  processSeismicAudio();
   if (earthquakeService.consumeDisplayChanged()) {
     drawDateTime();
     drawMainScreen();
@@ -2062,7 +2130,8 @@ void loop() {
     lastDisplayUpdate = now;
     drawDateTime();
   }
-  if (displaySleepEnabled && !displaySleeping &&
+  if (displaySleepEnabled && !displaySleeping && !speech.isSpeaking() &&
+      !earthquakeSpeech.activeOrPending() &&
       now - lastDisplayActivity >= displaySleepTimeoutMs()) {
     sleepDisplay();
   }

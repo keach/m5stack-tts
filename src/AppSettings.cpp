@@ -7,6 +7,8 @@ constexpr char VOLUME_KEY[] = "volume";
 constexpr char DISPLAY_SLEEP_ENABLED_KEY[] = "sleep_en";
 constexpr char DISPLAY_SLEEP_MINUTES_KEY[] = "sleep_min";
 constexpr char DISPLAY_BRIGHTNESS_KEY[] = "bright_pct";
+constexpr char EEW_SPEECH_ENABLED_KEY[] = "eew_speech";
+constexpr char EARTHQUAKE_SPEECH_ENABLED_KEY[] = "quake_speech";
 constexpr char SCHEDULE_ENABLED_KEYS[][8] = {"fc_en0", "fc_en1", "fc_en2"};
 constexpr char SCHEDULE_MINUTE_KEYS[][8] = {"fc_min0", "fc_min1", "fc_min2"};
 constexpr char SCHEDULE_LAST_RUN_KEYS[][8] = {"fc_run0", "fc_run1", "fc_run2"};
@@ -40,6 +42,10 @@ void AppSettings::begin() {
   displayBrightnessPercent_ = validDisplayBrightnessPercent(storedBrightness)
                                   ? storedBrightness
                                   : DEFAULT_DISPLAY_BRIGHTNESS_PERCENT;
+  eewSpeechEnabled_ = preferences_.getBool(EEW_SPEECH_ENABLED_KEY,
+                                           DEFAULT_EEW_SPEECH_ENABLED);
+  earthquakeSpeechEnabled_ = preferences_.getBool(
+      EARTHQUAKE_SPEECH_ENABLED_KEY, DEFAULT_EARTHQUAKE_SPEECH_ENABLED);
   for (size_t index = 0; index < FORECAST_SCHEDULE_COUNT; ++index) {
     ForecastSchedule& schedule = forecastSchedules_[index];
     schedule.enabled = preferences_.getBool(SCHEDULE_ENABLED_KEYS[index], false);
@@ -56,6 +62,7 @@ void AppSettings::save(ClockDisplayPrecision clockPrecision,
                        uint8_t volumePercent,
                        bool displaySleepEnabled, uint8_t displaySleepMinutes,
                        uint8_t displayBrightnessPercent,
+                       bool eewSpeechEnabled, bool earthquakeSpeechEnabled,
                        const ForecastSchedule* forecastSchedules) {
   const uint8_t constrainedVolume =
       min(volumePercent, static_cast<uint8_t>(100));
@@ -87,6 +94,15 @@ void AppSettings::save(ClockDisplayPrecision clockPrecision,
   if (displayBrightnessPercent_ != constrainedBrightness) {
     preferences_.putUChar(DISPLAY_BRIGHTNESS_KEY, constrainedBrightness);
     displayBrightnessPercent_ = constrainedBrightness;
+  }
+  if (eewSpeechEnabled_ != eewSpeechEnabled) {
+    preferences_.putBool(EEW_SPEECH_ENABLED_KEY, eewSpeechEnabled);
+    eewSpeechEnabled_ = eewSpeechEnabled;
+  }
+  if (earthquakeSpeechEnabled_ != earthquakeSpeechEnabled) {
+    preferences_.putBool(EARTHQUAKE_SPEECH_ENABLED_KEY,
+                         earthquakeSpeechEnabled);
+    earthquakeSpeechEnabled_ = earthquakeSpeechEnabled;
   }
   if (!forecastSchedules) {
     return;
@@ -132,6 +148,12 @@ uint8_t AppSettings::displaySleepMinutes() const {
 
 uint8_t AppSettings::displayBrightnessPercent() const {
   return displayBrightnessPercent_;
+}
+
+bool AppSettings::eewSpeechEnabled() const { return eewSpeechEnabled_; }
+
+bool AppSettings::earthquakeSpeechEnabled() const {
+  return earthquakeSpeechEnabled_;
 }
 
 uint8_t AppSettings::displayBrightnessLevel(uint8_t percent) {

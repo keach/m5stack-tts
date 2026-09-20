@@ -50,6 +50,7 @@ class EarthquakeService {
              bool useSandbox, bool allowSandboxAudio,
              EarthquakeHistoryService* historyService = nullptr);
   void loop();
+  bool connectionAttemptDue() const;
   bool pauseForNetworkRequest();
   void resumeAfterNetworkRequest();
   bool active() const;

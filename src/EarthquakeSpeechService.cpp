@@ -17,6 +17,21 @@ void copyText(char* destination, size_t capacity, const char* source) {
   if (!destination || capacity == 0) return;
   strlcpy(destination, source ? source : "", capacity);
 }
+
+const char* speechTextOrUnknown(const char* value) {
+  return value && value[0] != '\0' ? value : "不明";
+}
+
+void formatSpeechTime(const char* value, char* destination, size_t capacity) {
+  int hour = 0;
+  int minute = 0;
+  if (value && sscanf(value, "%d:%d", &hour, &minute) == 2 && hour >= 0 &&
+      hour <= 23 && minute >= 0 && minute <= 59) {
+    snprintf(destination, capacity, "%d時%d分", hour, minute);
+    return;
+  }
+  copyText(destination, capacity, "時刻不明");
+}
 }  // namespace
 
 void EarthquakeSpeechService::begin(bool eewEnabled, bool earthquakeEnabled) {
@@ -58,7 +73,7 @@ void EarthquakeSpeechService::enqueue(const SeismicEvent& event) {
       !hasEewStarted(event.eventId)) {
     for (size_t index = 0; index < queueCount_;) {
       if (queue_[index].kind == RequestKind::Eew &&
-          strcmp(queue_[index].event.eventId, event.eventId) == 0) {
+          strcmp(queue_[index].eventKey, event.eventId) == 0) {
         removeAt(index);
       } else {
         ++index;
@@ -125,11 +140,13 @@ bool EarthquakeSpeechService::buildEewRequest(const SeismicEvent& event,
   const size_t stateIndex = findEewState(event.eventId);
   const bool previouslyStarted = stateIndex < eewStateCount_;
   request->eewInitialPending = !previouslyStarted;
-  request->event = event;
+  request->eewCancelled = event.cancelled;
+  copyText(request->eventKey, sizeof(request->eventKey), event.eventId);
+  const char* hypocenter = speechTextOrUnknown(event.hypocenter);
   snprintf(request->signature, sizeof(request->signature),
            "%d|%d|%d|%.1f|%s|%s", event.cancelled, event.targetMatched,
            event.maxScale, event.magnitude, event.targetAreas,
-           event.hypocenter);
+           hypocenter);
   if (previouslyStarted &&
       strcmp(eewStates_[stateIndex].signature, request->signature) == 0) {
     return false;
@@ -164,7 +181,7 @@ bool EarthquakeSpeechService::buildEewRequest(const SeismicEvent& event,
   char details[256];
   snprintf(details, sizeof(details),
            "震源は%s、予想最大震度は%s、マグニチュードは%sです。",
-           event.hypocenter, scaleText(event.maxScale), magnitude);
+           hypocenter, scaleText(event.maxScale), magnitude);
   strlcat(request->message, details, sizeof(request->message));
   return true;
 }
@@ -178,11 +195,12 @@ bool EarthquakeSpeechService::buildEarthquakeRequest(
 
   request->kind = RequestKind::Earthquake;
   request->priority = PRIORITY_EARTHQUAKE;
-  request->event = event;
+  copyText(request->eventKey, sizeof(request->eventKey), event.logicalKey);
+  const char* hypocenter = speechTextOrUnknown(event.hypocenter);
   snprintf(request->signature, sizeof(request->signature),
            "%d|%d|%d|%.1f|%s|%s", event.corrected, event.maxScale,
            event.nationalMaxScale, event.magnitude, event.targetAreas,
-           event.hypocenter);
+           hypocenter);
   if (strcmp(lastEarthquakeKey_, event.logicalKey) == 0 &&
       strcmp(lastEarthquakeSignature_, request->signature) == 0) {
     return false;
@@ -195,11 +213,13 @@ bool EarthquakeSpeechService::buildEarthquakeRequest(
   } else {
     snprintf(magnitude, sizeof(magnitude), "%.1f", event.magnitude);
   }
+  char eventTime[32];
+  formatSpeechTime(event.eventTime, eventTime, sizeof(eventTime));
   char message[440];
   snprintf(message, sizeof(message),
            "地震情報です。%sごろ、%sを震源とするマグニチュード%sの地震がありました。"
            "設定地域の最大震度は%s",
-           event.eventTime, event.hypocenter, magnitude,
+           eventTime, hypocenter, magnitude,
            scaleText(event.maxScale));
   strlcat(request->message, message, sizeof(request->message));
   if (event.maxScale != event.nationalMaxScale) {
@@ -218,12 +238,11 @@ void EarthquakeSpeechService::enqueueRequest(const Request& request) {
     Request& queued = queue_[index];
     const bool sameEew = request.kind == RequestKind::Eew &&
                          queued.kind == RequestKind::Eew &&
-                         strcmp(request.event.eventId,
-                                queued.event.eventId) == 0;
+                         strcmp(request.eventKey, queued.eventKey) == 0;
     const bool sameEarthquake =
         request.kind == RequestKind::Earthquake &&
         queued.kind == RequestKind::Earthquake &&
-        strcmp(request.event.logicalKey, queued.event.logicalKey) == 0;
+        strcmp(request.eventKey, queued.eventKey) == 0;
     if (sameEew || sameEarthquake) {
       const bool retainEewInitialPending = queued.eewInitialPending;
       queued = request;
@@ -245,7 +264,7 @@ void EarthquakeSpeechService::enqueueRequest(const Request& request) {
     if (removeIndex == MAX_QUEUE_SIZE) {
       for (size_t index = 0; index < queueCount_; ++index) {
         if (queue_[index].kind == RequestKind::Eew &&
-            !queue_[index].event.cancelled &&
+            !queue_[index].eewCancelled &&
             !queue_[index].eewInitialPending) {
           removeIndex = index;
           break;
@@ -285,7 +304,7 @@ void EarthquakeSpeechService::rememberStarted(const Request& request) {
     rememberEewStarted(request);
   } else {
     copyText(lastEarthquakeKey_, sizeof(lastEarthquakeKey_),
-             request.event.logicalKey);
+             request.eventKey);
     copyText(lastEarthquakeSignature_, sizeof(lastEarthquakeSignature_),
              request.signature);
     preferences_.putString(EARTHQUAKE_KEY, lastEarthquakeKey_);
@@ -307,7 +326,7 @@ size_t EarthquakeSpeechService::findEewState(const char* eventId) const {
 }
 
 void EarthquakeSpeechService::rememberEewStarted(const Request& request) {
-  size_t index = findEewState(request.event.eventId);
+  size_t index = findEewState(request.eventKey);
   if (index < eewStateCount_) {
     for (size_t next = index + 1; next < eewStateCount_; ++next) {
       eewStates_[next - 1] = eewStates_[next];
@@ -321,7 +340,7 @@ void EarthquakeSpeechService::rememberEewStarted(const Request& request) {
     --eewStateCount_;
   }
   EewState& state = eewStates_[eewStateCount_++];
-  copyText(state.eventId, sizeof(state.eventId), request.event.eventId);
+  copyText(state.eventId, sizeof(state.eventId), request.eventKey);
   copyText(state.signature, sizeof(state.signature), request.signature);
   preferences_.putString(EEW_EVENT_KEY, state.eventId);
   preferences_.putString(EEW_SIGNATURE_KEY, state.signature);

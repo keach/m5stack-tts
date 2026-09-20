@@ -29,9 +29,10 @@ class EarthquakeSpeechService {
     RequestKind kind = RequestKind::Earthquake;
     uint8_t priority = 0;
     bool eewInitialPending = false;
-    SeismicEvent event;
+    bool eewCancelled = false;
+    char eventKey[128] = {};
     char signature[192] = {};
-    char message[512] = {};
+    char message[448] = {};
   };
 
   struct EewState {

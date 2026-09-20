@@ -140,8 +140,10 @@ unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
 bool displayDrawingSuppressed = false;
 bool japaneseFontReloadPending = false;
+bool japaneseFontSuspendedForP2P = false;
 bool speechWasActive = false;
 bool drawingSuppressedBeforeFontSuspend = false;
+bool drawingSuppressedBeforeP2PFontSuspend = false;
 unsigned long nextJapaneseFontReloadAttempt = 0;
 bool displaySleepEnabled = AppSettings::DEFAULT_DISPLAY_SLEEP_ENABLED;
 uint8_t displaySleepMinutes = AppSettings::DEFAULT_DISPLAY_SLEEP_MINUTES;
@@ -1811,6 +1813,40 @@ void retryJapaneseFontReload() {
   drawMainScreen();
 }
 
+void prepareJapaneseFontForP2PConnection() {
+  if (japaneseFontSuspendedForP2P ||
+      !earthquakeService.connectionAttemptDue()) {
+    return;
+  }
+  if (!japaneseFont.suspendForNetworkRequest()) return;
+  japaneseFontSuspendedForP2P = true;
+  drawingSuppressedBeforeP2PFontSuspend = displayDrawingSuppressed;
+  displayDrawingSuppressed = true;
+  Serial.println("Japanese font suspended for P2PQuake TLS connection.");
+  logRuntimeMemory("P2PQuake font suspended");
+}
+
+void restoreJapaneseFontAfterP2PConnection() {
+  if (!japaneseFontSuspendedForP2P ||
+      earthquakeService.connectionState() ==
+          EarthquakeService::ConnectionState::Connecting) {
+    return;
+  }
+  japaneseFontSuspendedForP2P = false;
+  if (!japaneseFont.resumeAfterNetworkRequest()) {
+    japaneseFontReloadPending = true;
+    drawingSuppressedBeforeFontSuspend =
+        drawingSuppressedBeforeP2PFontSuspend;
+    nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+    Serial.println("Japanese font reload deferred after P2PQuake TLS connection.");
+    return;
+  }
+  displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
+  Serial.println("Japanese font reloaded after P2PQuake TLS connection.");
+  drawDateTime();
+  drawMainScreen();
+}
+
 void logSpeechFontTransition() {
   const bool speaking = speech.isSpeaking();
   if (speaking == speechWasActive) return;
@@ -1926,7 +1962,9 @@ void loop() {
   M5.update();
   retryJapaneseFontReload();
   logSpeechFontTransition();
+  prepareJapaneseFontForP2PConnection();
   earthquakeService.loop();
+  restoreJapaneseFontAfterP2PConnection();
   earthquakeHistory.loop();
   if (mainScreen == MainScreen::EarthquakeHistory) {
     if (earthquakeService.active()) {

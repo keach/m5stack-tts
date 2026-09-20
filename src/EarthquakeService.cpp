@@ -279,6 +279,12 @@ void EarthquakeService::loop() {
   expireEvents();
 }
 
+bool EarthquakeService::connectionAttemptDue() const {
+  return started_ && !paused_ && WiFi.status() == WL_CONNECTED &&
+         !connected_ && !connecting_ &&
+         static_cast<long>(millis() - reconnectAt_) >= 0;
+}
+
 bool EarthquakeService::pauseForNetworkRequest() {
   if (!started_ || paused_ || (!connected_ && !connecting_)) return false;
   Serial.println("Pausing P2PQuake WebSocket for HTTPS requests.");

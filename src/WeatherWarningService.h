@@ -52,7 +52,7 @@ class WeatherWarningService {
   bool isSeen(const char* id) const;
   void rememberId(const char* id);
   bool parseEntry(const String& entry, String* id, String* url) const;
-  bool applyWarningXml(const String& url);
+  bool applyWarningXml(const String& url, bool* fetched);
   bool applyWarningItem(const String& item);
   int targetIndexForCode(const char* code) const;
   int targetIndexForUrl(const String& url) const;

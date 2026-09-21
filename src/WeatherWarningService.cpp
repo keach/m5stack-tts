@@ -180,18 +180,23 @@ bool WeatherWarningService::applyWarningItem(const String& item) {
   return true;
 }
 
-bool WeatherWarningService::applyWarningXml(const String& url) {
+bool WeatherWarningService::applyWarningXml(const String& url, bool* fetched) {
+  *fetched = false;
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(10000);
-  if (!http.begin(client, url)) return false;
+  http.setTimeout(30000);
+  if (!http.begin(client, url)) {
+    Serial.println("Failed to initialize JMA warning XML request.");
+    return false;
+  }
   const int status = http.GET();
   if (status != HTTP_CODE_OK) {
     Serial.printf("JMA warning XML returned HTTP %d.\n", status);
     http.end();
     return false;
   }
+  *fetched = true;
 
   Stream& stream = http.getStream();
   bool matchedSection = false;
@@ -230,6 +235,10 @@ bool WeatherWarningService::applyWarningXml(const String& url) {
     }
   }
   http.end();
+  if (!matchedSection) {
+    Serial.printf("JMA warning XML had no target Information section: %s\n",
+                  url.c_str());
+  }
   return matchedSection;
 }
 
@@ -242,72 +251,81 @@ bool WeatherWarningService::poll() {
     status_ = Status::WiFiUnavailable;
     return false;
   }
-  Serial.println("Requesting JMA weather warning Atom feed...");
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.setTimeout(10000);
-  if (!http.begin(client, FEED_URL)) {
-    status_ = Status::FeedFailed;
-    return false;
-  }
-  const int response = http.GET();
-  if (response != HTTP_CODE_OK) {
-    Serial.printf("JMA Atom feed returned HTTP %d.\n", response);
-    http.end();
-    status_ = Status::FeedFailed;
-    return false;
-  }
-
   struct PendingEntry {
     String id;
     String url;
   } pending[MAX_TARGETS];
   bool selected[MAX_TARGETS] = {};
   size_t selectedCount = 0;
-  Stream& stream = http.getStream();
-  bool inEntry = false;
-  String entry;
-  entry.reserve(2048);
-  while (http.connected() || stream.available()) {
-    String line = stream.readStringUntil('\n');
-    line.trim();
-    if (line.isEmpty()) continue;
-    if (line.startsWith("<entry>")) {
-      inEntry = true;
-      entry = line;
-      continue;
-    }
-    if (!inEntry) continue;
-    if (entry.length() + line.length() > 2048) {
-      Serial.println("JMA Atom entry exceeded parser limit.");
+
+  // Release the Atom feed TLS client before starting any warning XML request.
+  // Retaining both TLS clients exceeds the largest contiguous ESP32 heap block.
+  {
+    Serial.println("Requesting JMA weather warning Atom feed...");
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setTimeout(30000);
+    if (!http.begin(client, FEED_URL)) {
       http.end();
       status_ = Status::FeedFailed;
       return false;
     }
-    entry += line;
-    if (line.indexOf("</entry>") < 0) continue;
-
-    String id, url;
-    if (parseEntry(entry, &id, &url) && !isSeen(id.c_str())) {
-      const int targetIndex = targetIndexForUrl(url);
-      if (targetIndex >= 0 && !selected[targetIndex]) {
-        pending[targetIndex].id = id;
-        pending[targetIndex].url = url;
-        selected[targetIndex] = true;
-        ++selectedCount;
-      }
+    const int response = http.GET();
+    if (response != HTTP_CODE_OK) {
+      Serial.printf("JMA Atom feed returned HTTP %d.\n", response);
+      http.end();
+      status_ = Status::FeedFailed;
+      return false;
     }
-    inEntry = false;
-    if (selectedCount == targetCount_) break;
+
+    Stream& stream = http.getStream();
+    bool inEntry = false;
+    String entry;
+    entry.reserve(2048);
+    while (http.connected() || stream.available()) {
+      String line = stream.readStringUntil('\n');
+      line.trim();
+      if (line.isEmpty()) continue;
+      if (line.startsWith("<entry>")) {
+        inEntry = true;
+        entry = line;
+        continue;
+      }
+      if (!inEntry) continue;
+      if (entry.length() + line.length() > 2048) {
+        Serial.println("JMA Atom entry exceeded parser limit.");
+        http.end();
+        status_ = Status::FeedFailed;
+        return false;
+      }
+      entry += line;
+      if (line.indexOf("</entry>") < 0) continue;
+
+      String id, url;
+      if (parseEntry(entry, &id, &url) && !isSeen(id.c_str())) {
+        const int targetIndex = targetIndexForUrl(url);
+        if (targetIndex >= 0 && !selected[targetIndex]) {
+          pending[targetIndex].id = id;
+          pending[targetIndex].url = url;
+          selected[targetIndex] = true;
+          ++selectedCount;
+        }
+      }
+      inEntry = false;
+      if (selectedCount == targetCount_) break;
+    }
+    http.end();
   }
-  http.end();
 
   bool parsedAny = false;
   for (size_t index = 0; index < targetCount_; ++index) {
     if (!selected[index]) continue;
-    if (!applyWarningXml(pending[index].url)) {
-      status_ = Status::XmlFailed;
+    bool fetched = false;
+    if (!applyWarningXml(pending[index].url, &fetched)) {
+      Serial.printf("Weather warning XML processing failed: %s\n",
+                    pending[index].url.c_str());
+      status_ = fetched ? Status::ParseFailed : Status::XmlFailed;
       return false;
     }
     rememberId(pending[index].id.c_str());

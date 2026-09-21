@@ -70,6 +70,8 @@ constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
 constexpr uint8_t LOG_RETRY_LIMIT = 3;
 constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_MS = 1000;
+constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_WHILE_P2P_ACTIVE_MS =
+    30UL * 1000UL;
 
 struct WeatherData {
   char condition[32] = "--";
@@ -1883,9 +1885,6 @@ bool updateWeather(WeatherRequestSource source,
         forecast.valid ? "yes" : "no",
         static_cast<unsigned>(forecast.count));
   }
-  if (earthquakeConnectionPaused) {
-    earthquakeService.resumeAfterNetworkRequest();
-  }
   if (japaneseFontSuspended) {
     if (japaneseFont.resumeAfterNetworkRequest()) {
       displayDrawingSuppressed = drawingWasSuppressed;
@@ -1894,7 +1893,13 @@ bool updateWeather(WeatherRequestSource source,
       drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
       nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
       Serial.println("Japanese font reload will be retried from loop().");
+      // Keep the UI responsive with the ASCII fallback while reloading is
+      // deferred for a fragmented heap.
+      displayDrawingSuppressed = drawingWasSuppressed;
     }
+  }
+  if (earthquakeConnectionPaused) {
+    earthquakeService.resumeAfterNetworkRequest();
   }
   applyNotificationPlan();
   logRuntimeMemory("weather update complete");
@@ -1917,7 +1922,6 @@ void updateWeatherWarnings() {
   const bool drawingWasSuppressed = displayDrawingSuppressed;
   if (japaneseFontSuspended) displayDrawingSuppressed = true;
   const bool updated = weatherWarnings.poll();
-  if (earthquakeConnectionPaused) earthquakeService.resumeAfterNetworkRequest();
   if (japaneseFontSuspended) {
     if (japaneseFont.resumeAfterNetworkRequest()) {
       displayDrawingSuppressed = drawingWasSuppressed;
@@ -1925,8 +1929,12 @@ void updateWeatherWarnings() {
       japaneseFontReloadPending = true;
       drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
       nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+      // The warnings screen can be rendered in ASCII until the font reload is
+      // safe; do not leave all display updates suppressed.
+      displayDrawingSuppressed = drawingWasSuppressed;
     }
   }
+  if (earthquakeConnectionPaused) earthquakeService.resumeAfterNetworkRequest();
   Serial.printf("Weather warning request result: %s.\n",
                 updated ? "success" : "failed");
   drawMainScreen();
@@ -1935,6 +1943,13 @@ void updateWeatherWarnings() {
 void retryJapaneseFontReload() {
   if (!japaneseFontReloadPending ||
       static_cast<long>(millis() - nextJapaneseFontReloadAttempt) < 0) {
+    return;
+  }
+  const auto p2pState = earthquakeService.connectionState();
+  if (p2pState == P2PConnectionState::Connecting ||
+      p2pState == P2PConnectionState::Connected) {
+    nextJapaneseFontReloadAttempt =
+        millis() + JAPANESE_FONT_RELOAD_RETRY_WHILE_P2P_ACTIVE_MS;
     return;
   }
   if (!japaneseFont.resumeAfterNetworkRequest()) {
@@ -1974,6 +1989,9 @@ void restoreJapaneseFontAfterP2PConnection() {
         drawingSuppressedBeforeP2PFontSuspend;
     nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
     Serial.println("Japanese font reload deferred after P2PQuake TLS connection.");
+    // P2PQuake can remain connected for a long time.  Restore display updates
+    // now so button-driven navigation uses the ASCII fallback meanwhile.
+    displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
     return;
   }
   displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
@@ -2221,8 +2239,10 @@ void loop() {
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
 
-  if (!warningAttempted ||
-      millis() - lastWarningAttempt >= WEATHER_WARNING_UPDATE_INTERVAL_MS) {
+  const bool warningUpdateDue = !warningAttempted ||
+      millis() - lastWarningAttempt >= WEATHER_WARNING_UPDATE_INTERVAL_MS;
+  if (warningUpdateDue &&
+      earthquakeService.connectionState() != P2PConnectionState::Connecting) {
     updateWeatherWarnings();
   }
 

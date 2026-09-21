@@ -31,6 +31,7 @@ class JapaneseFont {
   uint32_t glyphCount_ = 0;
 
   bool loadGlyphCodes();
+  bool canSafelyLoadFontMetrics() const;
   bool hasGlyph(uint32_t codePoint) const;
   String sanitize(const char* text) const;
 };

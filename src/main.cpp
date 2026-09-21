@@ -60,6 +60,8 @@ constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
 constexpr uint8_t LOG_RETRY_LIMIT = 3;
 constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_MS = 1000;
+constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_WHILE_P2P_ACTIVE_MS =
+    30UL * 1000UL;
 
 struct WeatherData {
   char condition[32] = "--";
@@ -1778,9 +1780,6 @@ bool updateWeather(WeatherRequestSource source,
         forecast.valid ? "yes" : "no",
         static_cast<unsigned>(forecast.count));
   }
-  if (earthquakeConnectionPaused) {
-    earthquakeService.resumeAfterNetworkRequest();
-  }
   if (japaneseFontSuspended) {
     if (japaneseFont.resumeAfterNetworkRequest()) {
       displayDrawingSuppressed = drawingWasSuppressed;
@@ -1789,7 +1788,13 @@ bool updateWeather(WeatherRequestSource source,
       drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
       nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
       Serial.println("Japanese font reload will be retried from loop().");
+      // Keep navigation and sleep/wake responsive with the ASCII fallback
+      // while the Japanese font cannot be allocated safely.
+      displayDrawingSuppressed = drawingWasSuppressed;
     }
+  }
+  if (earthquakeConnectionPaused) {
+    earthquakeService.resumeAfterNetworkRequest();
   }
   applyNotificationPlan();
   logRuntimeMemory("weather update complete");
@@ -1800,6 +1805,13 @@ bool updateWeather(WeatherRequestSource source,
 void retryJapaneseFontReload() {
   if (!japaneseFontReloadPending ||
       static_cast<long>(millis() - nextJapaneseFontReloadAttempt) < 0) {
+    return;
+  }
+  const auto p2pState = earthquakeService.connectionState();
+  if (p2pState == EarthquakeService::ConnectionState::Connecting ||
+      p2pState == EarthquakeService::ConnectionState::Connected) {
+    nextJapaneseFontReloadAttempt =
+        millis() + JAPANESE_FONT_RELOAD_RETRY_WHILE_P2P_ACTIVE_MS;
     return;
   }
   if (!japaneseFont.resumeAfterNetworkRequest()) {
@@ -1839,6 +1851,9 @@ void restoreJapaneseFontAfterP2PConnection() {
         drawingSuppressedBeforeP2PFontSuspend;
     nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
     Serial.println("Japanese font reload deferred after P2PQuake TLS connection.");
+    // P2PQuake can remain connected for a long time. Restore screen updates
+    // immediately so the ASCII fallback remains fully interactive.
+    displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
     return;
   }
   displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;

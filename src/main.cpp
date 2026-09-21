@@ -30,6 +30,15 @@
 #include "ThingSpeakPublisher.h"
 #include "WebDownloadServer.h"
 #include "DiagnosticView.h"
+#include "WeatherWarningService.h"
+
+#if __has_include("weather_warning_config.h")
+#include "weather_warning_config.h"
+#else
+constexpr const char* WEATHER_WARNING_TARGET_CODES[] = {""};
+constexpr const char* WEATHER_WARNING_TARGET_NAMES[] = {""};
+constexpr size_t WEATHER_WARNING_TARGET_COUNT = 0;
+#endif
 
 namespace {
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
@@ -39,6 +48,7 @@ constexpr unsigned long NTP_TIMEOUT_MS = 15000;
 constexpr char NTP_SERVER_PRIMARY[] = "ntp.nict.jp";
 constexpr char NTP_SERVER_SECONDARY[] = "pool.ntp.org";
 constexpr unsigned long WEATHER_UPDATE_INTERVAL_MS = 10UL * 60UL * 1000UL;
+constexpr unsigned long WEATHER_WARNING_UPDATE_INTERVAL_MS = 3UL * 60UL * 1000UL;
 constexpr unsigned long MANUAL_WEATHER_MIN_INTERVAL_MS = 30UL * 1000UL;
 constexpr unsigned long BUTTON_CONFIRMATION_MS = 80;
 constexpr unsigned long DISPLAY_UPDATE_INTERVAL_MS = 1000;
@@ -60,6 +70,8 @@ constexpr char WEATHER_LOG_PATH[] = "/weather.csv";
 constexpr unsigned long LOG_RETRY_INTERVAL_MS = 60UL * 1000UL;
 constexpr uint8_t LOG_RETRY_LIMIT = 3;
 constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_MS = 1000;
+constexpr unsigned long JAPANESE_FONT_RELOAD_RETRY_WHILE_P2P_ACTIVE_MS =
+    30UL * 1000UL;
 
 struct WeatherData {
   char condition[32] = "--";
@@ -101,6 +113,7 @@ enum class MainScreen {
   CurrentWeather,
   Forecast,
   EarthquakeHistory,
+  WeatherWarnings,
 };
 
 enum class DisplayWakeReason {
@@ -133,8 +146,13 @@ unsigned long lastForecastInteraction = 0;
 unsigned long lastHistoryInteraction = 0;
 bool historyDetailShown = false;
 bool historyInterruptedBySeismic = false;
+unsigned long lastWarningInteraction = 0;
+bool warningDetailShown = false;
+size_t selectedWarning = 0;
 unsigned long lastWeatherAttempt = 0;
 bool weatherAttempted = false;
+unsigned long lastWarningAttempt = 0;
+bool warningAttempted = false;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastDisplayActivity = 0;
 bool displaySleeping = false;
@@ -169,6 +187,7 @@ EarthquakeService earthquakeService;
 EarthquakeSpeechService earthquakeSpeech;
 EarthquakeHistoryService earthquakeHistory;
 EarthquakeHistoryReader earthquakeHistoryReader;
+WeatherWarningService weatherWarnings;
 
 struct UpdateNotificationPlan {
   bool higherPriorityTriggered = false;
@@ -584,7 +603,14 @@ void drawWeather() {
   M5.Lcd.setTextSize(2);
   const int temperatureAlert =
       weather.valid ? temperatureAlerts.activeThreshold(weather.temperature) : 0;
-  if (temperatureAlert >= 40) {
+  const WeatherWarningService::Warning* priorityWarning =
+      weatherWarnings.highestPriority();
+  if (priorityWarning && priorityWarning->special) {
+    M5.Lcd.fillRect(0, 40, 320, 28, TFT_RED);
+    M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
+  } else if (priorityWarning) {
+    M5.Lcd.setTextColor(TFT_RED, TFT_BLACK);
+  } else if (temperatureAlert >= 40) {
     M5.Lcd.fillRect(0, 40, 320, 28, TFT_RED);
     M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
   } else {
@@ -596,7 +622,16 @@ void drawWeather() {
   }
   M5.Lcd.setCursor(16, 44);
   const bool japanese = japaneseFont.loaded();
-  if (japanese && temperatureAlert >= 40) {
+  if (japanese && priorityWarning) {
+    char line[80];
+    snprintf(line, sizeof(line), "%s: %s%s",
+             priorityWarning->special ? "特別警報" : "警報",
+             priorityWarning->name,
+             weatherWarnings.count() > 1 ? " ほか" : "");
+    japaneseFont.drawLineEllipsized(
+        40, line, priorityWarning->special ? TFT_WHITE : TFT_RED,
+        priorityWarning->special ? TFT_RED : TFT_BLACK);
+  } else if (japanese && temperatureAlert >= 40) {
     japaneseFont.drawLine(40, "危険な暑さ: 40 ℃", TFT_WHITE, TFT_RED);
   } else if (japanese && temperatureAlert >= 35) {
     japaneseFont.drawLine(40, "高温警戒: 35 ℃", TFT_RED, TFT_BLACK);
@@ -613,6 +648,8 @@ void drawWeather() {
     japaneseFont.drawLine(40, line, TFT_CYAN, TFT_BLACK);
   } else if (japanese) {
     japaneseFont.drawLine(40, "現在の天気", TFT_CYAN, TFT_BLACK);
+  } else if (priorityWarning) {
+    M5.Lcd.print(priorityWarning->special ? "SPECIAL WARNING" : "WARNING");
   } else if (temperatureAlert >= 40) {
     M5.Lcd.print("EXTREME HEAT: 40 C");
   } else if (temperatureAlert >= 35) {
@@ -1118,7 +1155,75 @@ void drawEarthquakeHistory() {
   M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
   M5.Lcd.setCursor(24, 225);
   M5.Lcd.print(historyDetailShown ? "Any button: back to history"
-                                 : "A:older  B:details  C:weather");
+                                 : "A:older  B:details  C:warnings");
+}
+
+void drawWeatherWarnings() {
+  M5.Lcd.fillRect(0, 32, 320, 208, TFT_BLACK);
+  const bool japanese = japaneseFont.loaded();
+  const size_t count = weatherWarnings.count();
+  if (selectedWarning >= count && count > 0) selectedWarning = 0;
+  char line[96];
+  snprintf(line, sizeof(line), "WARNINGS%s %u/%u",
+           warningDetailShown ? " DETAIL" : "",
+           count == 0 ? 0 : static_cast<unsigned>(selectedWarning + 1),
+           static_cast<unsigned>(count));
+  drawHistoryAscii(39, line, TFT_CYAN);
+
+  if (count == 0) {
+    drawHistoryAscii(100, "No active warnings", TFT_GREEN);
+    if (weatherWarnings.status() != WeatherWarningService::Status::Available) {
+      drawHistoryAscii(132, weatherWarnings.statusText(), TFT_YELLOW);
+    }
+  } else {
+    const WeatherWarningService::Warning* warning =
+        weatherWarnings.warning(selectedWarning);
+    const uint16_t color = warning->special ? TFT_RED : TFT_ORANGE;
+    if (warningDetailShown) {
+      snprintf(line, sizeof(line), "%s", warning->special ? "SPECIAL WARNING"
+                                                            : "WARNING");
+      drawHistoryAscii(75, line, color);
+      snprintf(line, sizeof(line), "Area: %s", warning->area);
+      if (japanese) {
+        japaneseFont.drawLineEllipsized(107, line, TFT_WHITE, TFT_BLACK, 12);
+      } else {
+        drawHistoryAscii(107, line);
+      }
+      snprintf(line, sizeof(line), "Type: %s", warning->name);
+      if (japanese) {
+        japaneseFont.drawLineEllipsized(139, line, color, TFT_BLACK, 12);
+      } else {
+        drawHistoryAscii(139, line, color);
+      }
+      snprintf(line, sizeof(line), "Status: %s",
+               warning->continued ? "continued" : "issued");
+      drawHistoryAscii(171, line);
+    } else {
+      snprintf(line, sizeof(line), "%s", warning->special ? "特別警報" : "警報");
+      if (japanese) {
+        japaneseFont.drawLineEllipsized(76, line, color, TFT_BLACK, 12);
+        snprintf(line, sizeof(line), "地域: %s", warning->area);
+        japaneseFont.drawLineEllipsized(111, line, TFT_WHITE, TFT_BLACK, 12);
+        snprintf(line, sizeof(line), "内容: %s", warning->name);
+        japaneseFont.drawLineEllipsized(146, line, color, TFT_BLACK, 12);
+        snprintf(line, sizeof(line), "%s", warning->continued ? "継続" : "発表");
+        japaneseFont.drawLineEllipsized(181, line, TFT_WHITE, TFT_BLACK, 12);
+      } else {
+        drawHistoryAscii(76, warning->special ? "SPECIAL WARNING" : "WARNING",
+                         color);
+        snprintf(line, sizeof(line), "Area: %s", warning->area);
+        drawHistoryAscii(111, line);
+        snprintf(line, sizeof(line), "Type: %s", warning->name);
+        drawHistoryAscii(146, line, color);
+      }
+    }
+  }
+  M5.Lcd.fillRect(0, 218, 320, 22, TFT_NAVY);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_NAVY);
+  M5.Lcd.setCursor(20, 225);
+  M5.Lcd.print(warningDetailShown ? "Any button: back to warnings"
+                                  : "A:next  B:details  C:weather");
 }
 
 void drawMainScreen() {
@@ -1133,6 +1238,8 @@ void drawMainScreen() {
     drawForecast();
   } else if (mainScreen == MainScreen::EarthquakeHistory) {
     drawEarthquakeHistory();
+  } else if (mainScreen == MainScreen::WeatherWarnings) {
+    drawWeatherWarnings();
   } else {
     drawWeather();
   }
@@ -1778,9 +1885,6 @@ bool updateWeather(WeatherRequestSource source,
         forecast.valid ? "yes" : "no",
         static_cast<unsigned>(forecast.count));
   }
-  if (earthquakeConnectionPaused) {
-    earthquakeService.resumeAfterNetworkRequest();
-  }
   if (japaneseFontSuspended) {
     if (japaneseFont.resumeAfterNetworkRequest()) {
       displayDrawingSuppressed = drawingWasSuppressed;
@@ -1789,7 +1893,13 @@ bool updateWeather(WeatherRequestSource source,
       drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
       nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
       Serial.println("Japanese font reload will be retried from loop().");
+      // Keep the UI responsive with the ASCII fallback while reloading is
+      // deferred for a fragmented heap.
+      displayDrawingSuppressed = drawingWasSuppressed;
     }
+  }
+  if (earthquakeConnectionPaused) {
+    earthquakeService.resumeAfterNetworkRequest();
   }
   applyNotificationPlan();
   logRuntimeMemory("weather update complete");
@@ -1797,9 +1907,49 @@ bool updateWeather(WeatherRequestSource source,
   return currentUpdated || forecastUpdated;
 }
 
+void updateWeatherWarnings() {
+  lastWarningAttempt = millis();
+  warningAttempted = true;
+  if (WiFi.status() != WL_CONNECTED) {
+    weatherWarnings.poll();
+    drawMainScreen();
+    return;
+  }
+
+  const bool earthquakeConnectionPaused =
+      earthquakeService.pauseForNetworkRequest();
+  const bool japaneseFontSuspended = japaneseFont.suspendForNetworkRequest();
+  const bool drawingWasSuppressed = displayDrawingSuppressed;
+  if (japaneseFontSuspended) displayDrawingSuppressed = true;
+  const bool updated = weatherWarnings.poll();
+  if (japaneseFontSuspended) {
+    if (japaneseFont.resumeAfterNetworkRequest()) {
+      displayDrawingSuppressed = drawingWasSuppressed;
+    } else {
+      japaneseFontReloadPending = true;
+      drawingSuppressedBeforeFontSuspend = drawingWasSuppressed;
+      nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
+      // The warnings screen can be rendered in ASCII until the font reload is
+      // safe; do not leave all display updates suppressed.
+      displayDrawingSuppressed = drawingWasSuppressed;
+    }
+  }
+  if (earthquakeConnectionPaused) earthquakeService.resumeAfterNetworkRequest();
+  Serial.printf("Weather warning request result: %s.\n",
+                updated ? "success" : "failed");
+  drawMainScreen();
+}
+
 void retryJapaneseFontReload() {
   if (!japaneseFontReloadPending ||
       static_cast<long>(millis() - nextJapaneseFontReloadAttempt) < 0) {
+    return;
+  }
+  const auto p2pState = earthquakeService.connectionState();
+  if (p2pState == P2PConnectionState::Connecting ||
+      p2pState == P2PConnectionState::Connected) {
+    nextJapaneseFontReloadAttempt =
+        millis() + JAPANESE_FONT_RELOAD_RETRY_WHILE_P2P_ACTIVE_MS;
     return;
   }
   if (!japaneseFont.resumeAfterNetworkRequest()) {
@@ -1839,6 +1989,9 @@ void restoreJapaneseFontAfterP2PConnection() {
         drawingSuppressedBeforeP2PFontSuspend;
     nextJapaneseFontReloadAttempt = millis() + JAPANESE_FONT_RELOAD_RETRY_MS;
     Serial.println("Japanese font reload deferred after P2PQuake TLS connection.");
+    // P2PQuake can remain connected for a long time.  Restore display updates
+    // now so button-driven navigation uses the ASCII fallback meanwhile.
+    displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
     return;
   }
   displayDrawingSuppressed = drawingSuppressedBeforeP2PFontSuspend;
@@ -1990,6 +2143,9 @@ void setup() {
   temperatureAlerts.begin();
   rainAlerts.begin();
   rainForecastAlerts.begin();
+  weatherWarnings.begin(WEATHER_WARNING_TARGET_CODES,
+                        WEATHER_WARNING_TARGET_NAMES,
+                        WEATHER_WARNING_TARGET_COUNT);
   connectToWiFi();
   earthquakeHistory.begin(storageAvailable);
   earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
@@ -2083,6 +2239,13 @@ void loop() {
   rainAlerts.processPendingLog();
   rainForecastAlerts.processPendingLog();
 
+  const bool warningUpdateDue = !warningAttempted ||
+      millis() - lastWarningAttempt >= WEATHER_WARNING_UPDATE_INTERVAL_MS;
+  if (warningUpdateDue &&
+      earthquakeService.connectionState() != P2PConnectionState::Connecting) {
+    updateWeatherWarnings();
+  }
+
   processSeismicAudio();
   if (earthquakeService.consumeDisplayChanged()) {
     drawDateTime();
@@ -2134,7 +2297,18 @@ void loop() {
     noteDisplayActivity();
     drawMainScreen();
   }
-  if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
+  const bool warningDetailReturned = !displaySleeping &&
+      !seismicDisplayActive && mainScreen == MainScreen::WeatherWarnings &&
+      warningDetailShown &&
+      (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed());
+  if (warningDetailReturned) {
+    warningDetailShown = false;
+    buttonAConfirmationPending = false;
+    lastWarningInteraction = millis();
+    noteDisplayActivity();
+    drawMainScreen();
+  }
+  if (!historyDetailReturned && !warningDetailReturned && !displaySleeping && !seismicDisplayActive &&
       M5.BtnA.wasPressed()) {
     buttonAPressDetectedAt = millis();
     buttonAConfirmationPending = true;
@@ -2156,6 +2330,12 @@ void loop() {
         lastHistoryInteraction = millis();
         earthquakeHistoryReader.next();
         drawMainScreen();
+      } else if (mainScreen == MainScreen::WeatherWarnings) {
+        if (weatherWarnings.count() > 0) {
+          selectedWarning = (selectedWarning + 1) % weatherWarnings.count();
+        }
+        lastWarningInteraction = millis();
+        drawMainScreen();
       } else {
         updateWeather(WeatherRequestSource::ManualButton);
       }
@@ -2163,7 +2343,7 @@ void loop() {
   }
   if (scheduledForecastStopButtonConsumed) {
     scheduledForecastStopButtonConsumed = false;
-  } else if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
+  } else if (!historyDetailReturned && !warningDetailReturned && !displaySleeping && !seismicDisplayActive &&
              M5.BtnB.wasPressed()) {
     noteDisplayActivity();
     if (mainScreen == MainScreen::Forecast) {
@@ -2175,11 +2355,16 @@ void loop() {
           EarthquakeHistoryReader::Status::Available;
       buttonAConfirmationPending = false;
       drawMainScreen();
+    } else if (mainScreen == MainScreen::WeatherWarnings) {
+      lastWarningInteraction = millis();
+      warningDetailShown = weatherWarnings.count() > 0;
+      buttonAConfirmationPending = false;
+      drawMainScreen();
     } else {
       toggleScreenSpeech();
     }
   }
-  if (!historyDetailReturned && !displaySleeping && !seismicDisplayActive &&
+  if (!historyDetailReturned && !warningDetailReturned && !displaySleeping && !seismicDisplayActive &&
       M5.BtnC.wasPressed()) {
     japaneseFont.logRenderingState("before button C screen switch");
     noteDisplayActivity();
@@ -2192,9 +2377,15 @@ void loop() {
       historyInterruptedBySeismic = false;
       lastHistoryInteraction = millis();
       earthquakeHistoryReader.refresh();
+    } else if (mainScreen == MainScreen::EarthquakeHistory) {
+      mainScreen = MainScreen::WeatherWarnings;
+      historyDetailShown = false;
+      warningDetailShown = false;
+      lastWarningInteraction = millis();
+      earthquakeHistoryReader.close();
     } else {
       mainScreen = MainScreen::CurrentWeather;
-      earthquakeHistoryReader.close();
+      warningDetailShown = false;
     }
     if (mainScreen == MainScreen::Forecast) {
       lastForecastInteraction = millis();
@@ -2220,6 +2411,14 @@ void loop() {
     historyDetailShown = false;
     earthquakeHistoryReader.close();
     Serial.println("History screen timed out; returning to current weather.");
+    drawMainScreen();
+  }
+  if (mainScreen == MainScreen::WeatherWarnings && !displaySleeping &&
+      !seismicDisplayActive &&
+      millis() - lastWarningInteraction >= FORECAST_SCREEN_TIMEOUT_MS) {
+    mainScreen = MainScreen::CurrentWeather;
+    warningDetailShown = false;
+    Serial.println("Warnings screen timed out; returning to current weather.");
     drawMainScreen();
   }
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL_MS) {

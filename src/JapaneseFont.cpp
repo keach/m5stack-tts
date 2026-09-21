@@ -155,6 +155,14 @@ bool JapaneseFont::suspendForNetworkRequest() {
 
 bool JapaneseFont::resumeAfterNetworkRequest() {
   if (!suspended_) return loaded_;
+  // TFT_eSPI::loadMetrics() dereferences its allocation results without null
+  // checks.  Do not call it while an active TLS connection has fragmented the
+  // heap below the margin used for the initial font load.
+  constexpr uint32_t REQUIRED_FREE_HEAP = 96U * 1024U;
+  if (ESP.getFreeHeap() < REQUIRED_FREE_HEAP) {
+    Serial.println("Japanese font reload deferred because free heap is too low.");
+    return false;
+  }
   SdCardGuard guard(pdMS_TO_TICKS(1000));
   if (!guard.locked()) {
     Serial.println("Japanese font reload deferred because the SD card is busy.");

@@ -10,6 +10,11 @@ namespace {
 constexpr char FONT_NAME[] = "Japanese16";
 constexpr char FONT_PATH[] = "/Japanese16.vlw";
 constexpr int16_t LINE_HEIGHT = 22;
+// TFT_eSPI::loadMetrics() allocates seven arrays per glyph: 2 + 1 + 1 + 1 +
+// 2 + 1 + 4 bytes. It does not check any allocation result before dereference.
+constexpr uint32_t METRIC_BYTES_PER_GLYPH = 12;
+constexpr uint32_t METRIC_ALLOCATION_MARGIN = 2U * 1024U;
+constexpr uint32_t POST_LOAD_FREE_HEAP_RESERVE = 32U * 1024U;
 
 uint32_t readBigEndian32(File& file) {
   uint8_t bytes[4];
@@ -88,6 +93,13 @@ bool JapaneseFont::begin(bool storageAvailable) {
     glyphCount_ = 0;
     return false;
   }
+  if (!canSafelyLoadFontMetrics()) {
+    lineSprite_.deleteSprite();
+    free(glyphCodes_);
+    glyphCodes_ = nullptr;
+    glyphCount_ = 0;
+    return false;
+  }
   lineSprite_.loadFont(FONT_NAME, SD);
   if (!lineSprite_.fontLoaded || !lineSprite_.fontFile) {
     Serial.println("Japanese font load failed.");
@@ -155,6 +167,11 @@ bool JapaneseFont::suspendForNetworkRequest() {
 
 bool JapaneseFont::resumeAfterNetworkRequest() {
   if (!suspended_) return loaded_;
+  if (!canSafelyLoadFontMetrics()) {
+    Serial.println(
+        "Japanese font reload deferred because the heap is too fragmented.");
+    return false;
+  }
   SdCardGuard guard(pdMS_TO_TICKS(1000));
   if (!guard.locked()) {
     Serial.println("Japanese font reload deferred because the SD card is busy.");
@@ -171,6 +188,39 @@ bool JapaneseFont::resumeAfterNetworkRequest() {
   suspended_ = false;
   Serial.println("Japanese font reloaded after HTTPS requests.");
   logRuntimeMemory("Japanese font reloaded");
+  return true;
+}
+
+bool JapaneseFont::canSafelyLoadFontMetrics() const {
+  if (glyphCount_ == 0) {
+    Serial.println("Japanese font metrics are unavailable.");
+    return false;
+  }
+
+  const uint32_t metricBytes =
+      glyphCount_ * METRIC_BYTES_PER_GLYPH + METRIC_ALLOCATION_MARGIN;
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t largestBlock = ESP.getMaxAllocHeap();
+  if (freeHeap < metricBytes + POST_LOAD_FREE_HEAP_RESERVE ||
+      largestBlock < metricBytes) {
+    Serial.printf(
+        "Japanese font reload deferred: free=%u, largest=%u, required=%u "
+        "bytes.\n",
+        static_cast<unsigned>(freeHeap), static_cast<unsigned>(largestBlock),
+        static_cast<unsigned>(metricBytes));
+    return false;
+  }
+
+  // Probe the contiguous region before entering TFT_eSPI::loadMetrics().
+  // This protects against the library dereferencing a null allocation result.
+  void* probe = malloc(metricBytes);
+  if (!probe) {
+    Serial.printf(
+        "Japanese font reload deferred: unable to reserve %u metric bytes.\n",
+        static_cast<unsigned>(metricBytes));
+    return false;
+  }
+  free(probe);
   return true;
 }
 

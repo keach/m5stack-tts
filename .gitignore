@@ -5,6 +5,7 @@ include/secrets.h
 include/ambient_secrets.h
 include/thingspeak_secrets.h
 include/earthquake_config.h
+include/weather_warning_config.h
 vendor/aquestalk/
 sdcard/aq_dic/aqdic_m.bin
 .vscode/.browse.c_cpp.db*

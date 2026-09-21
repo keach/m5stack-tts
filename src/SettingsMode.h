@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <M5Stack.h>
 #include <WiFi.h>
 
@@ -8,11 +10,13 @@
 #include "DiagnosticModel.h"
 
 using DiagnosticStatus = DiagnosticSource;
+using WebAccessHandler = std::function<void()>;
 
 class SettingsMode {
  public:
   void run(AppSettings& settings, SpeechService& speech,
-           bool speechAvailable, const DiagnosticStatus& diagnostics);
+           bool speechAvailable, const DiagnosticStatus& diagnostics,
+           const WebAccessHandler& webAccessHandler = {});
 
  private:
   enum class DisplaySleepUpdate {

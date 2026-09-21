@@ -286,15 +286,21 @@ bool EarthquakeService::connectionAttemptDue() const {
 }
 
 bool EarthquakeService::pauseForNetworkRequest() {
-  if (!started_ || paused_ || (!connected_ && !connecting_)) return false;
-  Serial.println("Pausing P2PQuake WebSocket for HTTPS requests.");
+  if (!started_ || paused_) return false;
+  Serial.println("Pausing P2PQuake WebSocket for an exclusive network mode.");
   paused_ = true;
   setConnectionState(ConnectionState::Paused);
-  webSocket_.disconnect();
+  if (connected_ || connecting_) webSocket_.disconnect();
   connected_ = false;
   connecting_ = false;
   logRuntimeMemory("P2PQuake paused");
   return true;
+}
+
+void EarthquakeService::clearPendingNotifications() {
+  speechEventCount_ = 0;
+  soundRequested_ = SeismicSoundType::None;
+  wakeRequested_ = false;
 }
 
 void EarthquakeService::resumeAfterNetworkRequest() {

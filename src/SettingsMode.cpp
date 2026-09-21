@@ -27,6 +27,7 @@ enum MenuItem {
   MENU_FORECAST_3_MINUTE,
   MENU_ALARM_TEST,
   MENU_SPEECH_TEST,
+  MENU_WEB_ACCESS,
   MENU_DIAGNOSTICS,
   MENU_FIRMWARE_INFO,
   MENU_SAVE_AND_EXIT,
@@ -39,8 +40,8 @@ constexpr MenuItem MENU_ROW_ITEMS[] = {
     MENU_EEW_SPEECH,         MENU_EARTHQUAKE_SPEECH,
     MENU_FORECAST_1_ENABLED,
     MENU_FORECAST_2_ENABLED, MENU_FORECAST_3_ENABLED,
-    MENU_ALARM_TEST,         MENU_SPEECH_TEST,     MENU_DIAGNOSTICS,
-    MENU_FIRMWARE_INFO,      MENU_SAVE_AND_EXIT,
+    MENU_ALARM_TEST,         MENU_SPEECH_TEST,     MENU_WEB_ACCESS,
+    MENU_DIAGNOSTICS,        MENU_FIRMWARE_INFO,   MENU_SAVE_AND_EXIT,
 };
 constexpr int MENU_ROW_COUNT = sizeof(MENU_ROW_ITEMS) / sizeof(MenuItem);
 constexpr int MENU_PAGE_COUNT =
@@ -273,6 +274,9 @@ void SettingsMode::drawMenu(int selectedItem,
       case MENU_SPEECH_TEST:
         M5.Lcd.print("Speech test / stop");
         break;
+      case MENU_WEB_ACCESS:
+        M5.Lcd.print("Web access");
+        break;
       case MENU_DIAGNOSTICS:
         M5.Lcd.print("Diagnostics");
         break;
@@ -425,7 +429,8 @@ void SettingsMode::showFirmwareInfo(bool displaySleepEnabled,
 
 void SettingsMode::run(AppSettings& settings, SpeechService& speech,
                        bool speechAvailable,
-                       const DiagnosticStatus& diagnostics) {
+                       const DiagnosticStatus& diagnostics,
+                       const WebAccessHandler& webAccessHandler) {
   ClockDisplayPrecision draftClockPrecision = settings.clockPrecision();
   uint8_t draftVolume = settings.volumePercent();
   bool draftDisplaySleepEnabled = settings.displaySleepEnabled();
@@ -575,6 +580,17 @@ void SettingsMode::run(AppSettings& settings, SpeechService& speech,
             speech.stop();
           } else {
             speech.speak("音声テストです。音量を確認してください。");
+          }
+          noteDisplayActivity();
+          break;
+        case MENU_WEB_ACCESS:
+          if (speech.isSpeaking()) {
+            speech.stop();
+          }
+          if (webAccessHandler) {
+            webAccessHandler();
+          } else {
+            showMessage("WEB ACCESS", "Unavailable");
           }
           noteDisplayActivity();
           break;

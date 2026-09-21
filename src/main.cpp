@@ -1910,6 +1910,7 @@ void runWebAccessMode() {
   drawWebAccessScreen("HTTP server ready");
   while (true) {
     M5.update();
+    webDownloadServer.handleClient();
     if (sleeping) {
       if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed()) {
         sleeping = false;
@@ -1923,7 +1924,6 @@ void runWebAccessMode() {
       continue;
     }
 
-    webDownloadServer.handleClient();
     if (M5.BtnB.wasPressed()) break;
     if (M5.BtnA.wasPressed() || M5.BtnC.wasPressed()) {
       lastActivity = millis();

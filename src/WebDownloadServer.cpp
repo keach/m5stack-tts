@@ -4,7 +4,6 @@
 #include <WiFi.h>
 #include "EarthquakeHistoryService.h"
 #include "SdCardLock.h"
-#include "SpeechService.h"
 
 namespace {
 constexpr WebDownloadServer::DownloadFile DOWNLOADS[] = {
@@ -20,13 +19,10 @@ constexpr size_t DOWNLOAD_COUNT = sizeof(DOWNLOADS) / sizeof(DOWNLOADS[0]);
 }
 
 void WebDownloadServer::begin(
-    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory,
-    SpeechService* speechService) {
+    bool storageAvailable, EarthquakeHistoryService* earthquakeHistory) {
   storageAvailable_ = storageAvailable;
   earthquakeHistory_ = earthquakeHistory;
-  speechService_ = speechService;
   registerRoutes();
-  startIfReady();
 }
 void WebDownloadServer::registerRoutes() {
   if (routesRegistered_) return;
@@ -40,31 +36,31 @@ void WebDownloadServer::registerRoutes() {
   server_.onNotFound([this]() { sendText(404, "Not Found"); });
   routesRegistered_ = true;
 }
-void WebDownloadServer::startIfReady() {
-  if (started_ || WiFi.status() != WL_CONNECTED) return;
+bool WebDownloadServer::start() {
+  if (started_) return true;
+  if (WiFi.status() != WL_CONNECTED) return false;
   registerRoutes();
   server_.begin();
   started_ = true;
   Serial.printf("Web download server started at http://%s/\n",
                 WiFi.localIP().toString().c_str());
-}
-void WebDownloadServer::handleClient() {
-  startIfReady();
-  if (started_ && WiFi.status() == WL_CONNECTED) server_.handleClient();
-}
-bool WebDownloadServer::sendSpeechBusy() {
-  if (!speechService_ || !speechService_->isSpeaking()) return false;
-  server_.send(503, "text/plain; charset=utf-8", "Speech in progress. Retry shortly.");
   return true;
 }
+void WebDownloadServer::stop() {
+  if (!started_) return;
+  server_.stop();
+  started_ = false;
+  Serial.println("Web download server stopped.");
+}
+void WebDownloadServer::handleClient() {
+  if (started_ && WiFi.status() == WL_CONNECTED) server_.handleClient();
+}
 void WebDownloadServer::sendText(int status, const char* message) {
-  if (sendSpeechBusy()) return;
   server_.sendHeader("X-Content-Type-Options", "nosniff");
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(status, "text/plain; charset=utf-8", message);
 }
 void WebDownloadServer::sendIndex() {
-  if (sendSpeechBusy()) return;
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -91,7 +87,6 @@ void WebDownloadServer::sendIndex() {
   server_.send(200, "text/html; charset=utf-8", html);
 }
 void WebDownloadServer::sendDownload(const DownloadFile& download) {
-  if (sendSpeechBusy()) return;
   if (!storageAvailable_) { sendText(503, "microSD is unavailable"); return; }
   SdCardGuard sdGuard;
   if (!sdGuard.locked()) { sendText(503, "microSD is busy"); return; }
@@ -107,7 +102,6 @@ void WebDownloadServer::sendDownload(const DownloadFile& download) {
 }
 
 void WebDownloadServer::sendEarthquakeHistoryDownload() {
-  if (sendSpeechBusy()) return;
   if (!storageAvailable_ || !earthquakeHistory_) {
     sendText(503, "Earthquake history is unavailable");
     return;

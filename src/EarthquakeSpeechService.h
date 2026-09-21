@@ -16,6 +16,7 @@ class EarthquakeSpeechService {
   void enqueue(const SeismicEvent& event);
   void loop(SpeechService& speech);
   bool activeOrPending() const;
+  void clearPending();
 
  private:
   static constexpr size_t MAX_EEW_STATE_COUNT = MAX_QUEUE_SIZE;

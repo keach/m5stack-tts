@@ -59,6 +59,7 @@ class EarthquakeService {
   SeismicSoundType consumeSoundRequested();
   bool consumeWakeRequested();
   bool consumeSpeechEvent(SeismicEvent* event);
+  void clearPendingNotifications();
 
  private:
   static constexpr size_t MAX_TARGET_PREFECTURES = 8;

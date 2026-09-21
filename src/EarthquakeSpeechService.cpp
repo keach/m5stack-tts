@@ -115,6 +115,11 @@ bool EarthquakeSpeechService::activeOrPending() const {
   return active_ || queueCount_ > 0;
 }
 
+void EarthquakeSpeechService::clearPending() {
+  active_ = false;
+  queueCount_ = 0;
+}
+
 bool EarthquakeSpeechService::isEnabled(RequestKind kind) const {
   return kind == RequestKind::Eew ? eewEnabled_ : earthquakeEnabled_;
 }

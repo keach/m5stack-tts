@@ -2,7 +2,6 @@
 #include <WebServer.h>
 
 class EarthquakeHistoryService;
-class SpeechService;
 
 class WebDownloadServer {
  public:
@@ -14,22 +13,20 @@ class WebDownloadServer {
     const char* downloadName;
   };
   void begin(bool storageAvailable,
-             EarthquakeHistoryService* earthquakeHistory = nullptr,
-             SpeechService* speechService = nullptr);
+             EarthquakeHistoryService* earthquakeHistory = nullptr);
+  bool start();
+  void stop();
   void handleClient();
   bool started() const { return started_; }
  private:
   void registerRoutes();
-  void startIfReady();
   void sendIndex();
   void sendDownload(const DownloadFile& download);
   void sendEarthquakeHistoryDownload();
   void sendText(int status, const char* message);
-  bool sendSpeechBusy();
   WebServer server_{80};
   bool storageAvailable_ = false;
   bool routesRegistered_ = false;
   bool started_ = false;
   EarthquakeHistoryService* earthquakeHistory_ = nullptr;
-  SpeechService* speechService_ = nullptr;
 };

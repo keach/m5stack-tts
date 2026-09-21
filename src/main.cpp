@@ -226,10 +226,10 @@ void refreshDiagnostics(DiagnosticModel& model) {
   model.set(DiagnosticItem::Ntp, timeReady ? DiagnosticState::Ok :
       wifi ? DiagnosticState::Ng : DiagnosticState::Skip,
       timeReady ? "Time available" : wifi ? "Time unavailable" : "Wi-Fi unavailable");
-  model.webAvailable = wifi && webDownloadServer.started();
-  model.set(DiagnosticItem::WebServer, model.webAvailable ? DiagnosticState::Ok :
-      webDownloadServer.started() || wifi ? DiagnosticState::Wait : DiagnosticState::Skip,
-      model.webAvailable ? "HTTP port 80" : "Network unavailable");
+  model.webAvailable = webDownloadServer.started();
+  model.set(DiagnosticItem::WebServer,
+            model.webAvailable ? DiagnosticState::Ok : DiagnosticState::Skip,
+            model.webAvailable ? "Web access mode" : "Not active");
   model.set(DiagnosticItem::Speech, speechAvailable ? DiagnosticState::Ok :
       storageAvailable ? DiagnosticState::Ng : DiagnosticState::Skip,
       speechAvailable ? "Ready" : "Speech unavailable");
@@ -1847,6 +1847,103 @@ void restoreJapaneseFontAfterP2PConnection() {
   drawMainScreen();
 }
 
+void drawWebAccessScreen(const char* detail) {
+  M5.Lcd.fillScreen(TFT_BLACK);
+  M5.Lcd.fillRect(0, 0, 320, 32, TFT_NAVY);
+  M5.Lcd.setTextColor(TFT_CYAN, TFT_NAVY);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor(86, 8);
+  M5.Lcd.print("WEB ACCESS");
+
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Lcd.setCursor(12, 54);
+  M5.Lcd.print("Server: ");
+  M5.Lcd.print(detail);
+  if (WiFi.status() == WL_CONNECTED) {
+    const String ipAddress = WiFi.localIP().toString();
+    const String url = "http://" + ipAddress + "/";
+    M5.Lcd.setTextColor(TFT_GREEN, TFT_BLACK);
+    M5.Lcd.setCursor(12, 90);
+    M5.Lcd.print("IP: ");
+    M5.Lcd.print(ipAddress);
+    M5.Lcd.setCursor(12, 116);
+    M5.Lcd.print(url);
+    M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    M5.Lcd.setCursor(12, 152);
+    M5.Lcd.print("Downloads are read-only");
+  }
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.setCursor(12, 204);
+  M5.Lcd.print("B: return to settings");
+}
+
+void runWebAccessMode() {
+  if (speech.isSpeaking()) speech.stop();
+  earthquakeSpeech.clearPending();
+  earthquakeService.clearPendingNotifications();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Web access mode unavailable because Wi-Fi is disconnected.");
+    drawWebAccessScreen("Wi-Fi unavailable");
+    while (true) {
+      M5.update();
+      if (M5.BtnB.wasPressed()) return;
+      delay(10);
+    }
+  }
+
+  const bool p2pPaused = earthquakeService.pauseForNetworkRequest();
+  if (!webDownloadServer.start()) {
+    Serial.println("Web access mode failed to start the HTTP server.");
+    if (p2pPaused) earthquakeService.resumeAfterNetworkRequest();
+    drawWebAccessScreen("Web server unavailable");
+    while (true) {
+      M5.update();
+      if (M5.BtnB.wasPressed()) return;
+      delay(10);
+    }
+  }
+
+  Serial.println("Web access mode started; normal services are paused.");
+  bool sleeping = false;
+  unsigned long lastActivity = millis();
+  drawWebAccessScreen("HTTP server ready");
+  while (true) {
+    M5.update();
+    webDownloadServer.handleClient();
+    if (sleeping) {
+      if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed()) {
+        sleeping = false;
+        M5.Lcd.wakeup();
+        M5.Lcd.setBrightness(
+            AppSettings::displayBrightnessLevel(displayBrightnessPercent));
+        lastActivity = millis();
+        drawWebAccessScreen("HTTP server ready");
+      }
+      delay(10);
+      continue;
+    }
+
+    if (M5.BtnB.wasPressed()) break;
+    if (M5.BtnA.wasPressed() || M5.BtnC.wasPressed()) {
+      lastActivity = millis();
+    }
+    if (displaySleepEnabled &&
+        millis() - lastActivity >= displaySleepTimeoutMs()) {
+      sleeping = true;
+      M5.Lcd.setBrightness(0);
+      M5.Lcd.sleep();
+      Serial.println("Web access display entered sleep mode.");
+    }
+    delay(10);
+  }
+
+  webDownloadServer.stop();
+  if (p2pPaused) earthquakeService.resumeAfterNetworkRequest();
+  noteDisplayActivity();
+  Serial.println("Web access mode ended; normal services resumed.");
+}
+
 void logSpeechFontTransition() {
   const bool speaking = speech.isSpeaking();
   if (speaking == speechWasActive) return;
@@ -1896,11 +1993,10 @@ void setup() {
   connectToWiFi();
   earthquakeHistory.begin(storageAvailable);
   earthquakeHistoryReader.begin(&earthquakeHistory, storageAvailable);
-  webDownloadServer.begin(storageAvailable, &earthquakeHistory, &speech);
-  diagnosticModel.webAvailable = webDownloadServer.started();
-  updateDiagnostic(DiagnosticItem::WebServer, webDownloadServer.started() ?
-      DiagnosticState::Ok : DiagnosticState::Skip,
-      webDownloadServer.started() ? "HTTP port 80" : "Wi-Fi unavailable");
+  webDownloadServer.begin(storageAvailable, &earthquakeHistory);
+  diagnosticModel.webAvailable = false;
+  updateDiagnostic(DiagnosticItem::WebServer, DiagnosticState::Skip,
+                   "Not active");
   syncTimeWithNtp();
 
   earthquakeService.begin(
@@ -1941,7 +2037,8 @@ void setup() {
 
   if (settingsRequested) {
     const DiagnosticStatus diagnostics = {diagnosticModel, refreshDiagnostics};
-    settingsMode.run(appSettings, speech, speechAvailable, diagnostics);
+    settingsMode.run(appSettings, speech, speechAvailable, diagnostics,
+                     runWebAccessMode);
     clockDisplayPrecision = appSettings.clockPrecision();
     displaySleepEnabled = appSettings.displaySleepEnabled();
     displaySleepMinutes = appSettings.displaySleepMinutes();
@@ -1980,7 +2077,6 @@ void loop() {
       if (earthquakeHistoryReader.consumeChanged()) drawMainScreen();
     }
   }
-  webDownloadServer.handleClient();
   thingSpeakPublisher.handle();
   processWeatherLogRetry();
   temperatureAlerts.processPendingLogs();

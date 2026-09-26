@@ -4,8 +4,9 @@
 #include <WiFi.h>
 #include <time.h>
 
-#include "RuntimeDiagnostics.h"
 #include "EarthquakeHistoryService.h"
+#include "P2PJsonBuffer.h"
+#include "RuntimeDiagnostics.h"
 
 namespace {
 constexpr char PRODUCTION_HOST[] = "api.p2pquake.net";
@@ -20,6 +21,30 @@ constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr time_t MAX_EVENT_AGE_SECONDS = 5 * 60;
 constexpr unsigned long RECONNECT_DELAYS_MS[] = {1000, 2000, 5000, 10000,
                                                   30000};
+// Keep the P2PQuake receive document out of the general heap. The Japanese
+// font metrics and TLS allocations can leave the heap fragmented even when
+// there is enough total free memory for a small earthquake message.
+constexpr size_t P2P_JSON_DOCUMENT_BYTES = 24U * 1024U;
+constexpr size_t P2P_JSON_FILTER_BYTES = 8U * 1024U;
+
+struct P2PJsonBuffers {
+  void reset() {
+    document.clear();
+    filter.clear();
+    documentAllocator.reset();
+    filterAllocator.reset();
+  }
+
+  FixedJsonArenaAllocator<P2P_JSON_DOCUMENT_BYTES> documentAllocator;
+  FixedJsonArenaAllocator<P2P_JSON_FILTER_BYTES> filterAllocator;
+  JsonDocument document{&documentAllocator};
+  JsonDocument filter{&filterAllocator};
+};
+
+P2PJsonBuffers& p2pJsonBuffers() {
+  static P2PJsonBuffers buffers;
+  return buffers;
+}
 
 struct EewAreaMapping {
   const char* area;
@@ -406,14 +431,16 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
   }
 }
 
-void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
+void EarthquakeService::processMessage(uint8_t* payload, size_t length) {
   if (!payload || length == 0 || length > 24576) {
     Serial.printf("P2PQuake message rejected (length=%u).\n",
                   static_cast<unsigned>(length));
     return;
   }
-  JsonDocument document;
-  JsonDocument filter;
+  P2PJsonBuffers& buffers = p2pJsonBuffers();
+  buffers.reset();
+  JsonDocument& document = buffers.document;
+  JsonDocument& filter = buffers.filter;
   filter["id"] = true;
   filter["_id"] = true;
   filter["code"] = true;
@@ -436,17 +463,45 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
   filter["areas"][0]["scaleTo"] = true;
   filter["points"][0]["pref"] = true;
   filter["points"][0]["scale"] = true;
+  if (filter.overflowed()) {
+    Serial.printf(
+        "P2PQuake JSON filter construction failed (filter=%u/%u, free=%u, "
+        "largest=%u).\n",
+        static_cast<unsigned>(buffers.filterAllocator.used()),
+        static_cast<unsigned>(buffers.filterAllocator.capacity()),
+        static_cast<unsigned>(ESP.getFreeHeap()),
+        static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return;
+  }
   const DeserializationError error = deserializeJson(
-      document, payload, length, DeserializationOption::Filter(filter));
+      // WebSocketsClient owns this mutable buffer for the duration of the
+      // callback. Zero-copy parsing avoids duplicating every selected string
+      // into the fixed arena, and no parsed value outlives this function.
+      document, reinterpret_cast<char*>(payload), length,
+      DeserializationOption::Filter(filter));
   if (error) {
-    Serial.printf("P2PQuake JSON parse failed: %s\n", error.c_str());
+    Serial.printf(
+        "P2PQuake JSON parse failed: %s (payload=%u, document=%u/%u, "
+        "filter=%u/%u, free=%u, largest=%u).\n",
+        error.c_str(), static_cast<unsigned>(length),
+        static_cast<unsigned>(buffers.documentAllocator.used()),
+        static_cast<unsigned>(buffers.documentAllocator.capacity()),
+        static_cast<unsigned>(buffers.filterAllocator.used()),
+        static_cast<unsigned>(buffers.filterAllocator.capacity()),
+        static_cast<unsigned>(ESP.getFreeHeap()),
+        static_cast<unsigned>(ESP.getMaxAllocHeap()));
     return;
   }
   const int code = document["code"] | 0;
   if (code != 551 && code != 556) return;
   const char* id = messageId(document);
   if (id[0] == '\0' || isDuplicateId(id)) return;
-  Serial.printf("P2PQuake message received: code=%d id=%s.\n", code, id);
+  Serial.printf(
+      "P2PQuake message received: code=%d id=%s (JSON=%u/%u, filter=%u/%u).\n",
+      code, id, static_cast<unsigned>(buffers.documentAllocator.used()),
+      static_cast<unsigned>(buffers.documentAllocator.capacity()),
+      static_cast<unsigned>(buffers.filterAllocator.used()),
+      static_cast<unsigned>(buffers.filterAllocator.capacity()));
   if (isStale(document["time"] | "")) {
     Serial.printf("P2PQuake stale message ignored: %s\n", id);
     rememberId(id);

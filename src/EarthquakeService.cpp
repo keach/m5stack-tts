@@ -1,6 +1,8 @@
 #include "EarthquakeService.h"
 
 #include <ArduinoJson.h>
+#include <cstddef>
+#include <cstring>
 #include <WiFi.h>
 #include <time.h>
 
@@ -20,6 +22,83 @@ constexpr time_t MINIMUM_VALID_TIME = 1600000000;
 constexpr time_t MAX_EVENT_AGE_SECONDS = 5 * 60;
 constexpr unsigned long RECONNECT_DELAYS_MS[] = {1000, 2000, 5000, 10000,
                                                   30000};
+// Keep the P2PQuake receive document out of the general heap. The Japanese
+// font metrics and TLS allocations can leave the heap fragmented even when
+// there is enough total free memory for a small earthquake message.
+constexpr size_t P2P_JSON_DOCUMENT_BYTES = 12U * 1024U;
+constexpr size_t P2P_JSON_FILTER_BYTES = 2U * 1024U;
+
+// ArduinoJson 7's StaticJsonDocument is retained only as a deprecated
+// compatibility wrapper; it still uses the default heap allocator. This
+// monotonic allocator instead owns a fixed BSS arena. Documents are cleared
+// before reset(), so no JSON value survives an incoming WebSocket event.
+template <size_t Capacity>
+class FixedJsonArenaAllocator final : public ArduinoJson::Allocator {
+ public:
+  void reset() { used_ = 0; }
+  size_t used() const { return used_; }
+  static constexpr size_t capacity() { return Capacity; }
+
+  void* allocate(size_t size) override {
+    if (size == 0) size = 1;
+    const size_t headerOffset = alignUp(used_);
+    const size_t dataOffset = headerOffset + sizeof(BlockHeader);
+    if (dataOffset > Capacity || size > Capacity - dataOffset) return nullptr;
+    auto* header = reinterpret_cast<BlockHeader*>(storage_ + headerOffset);
+    header->size = size;
+    used_ = dataOffset + size;
+    return storage_ + dataOffset;
+  }
+
+  void deallocate(void* /*pointer*/) override {
+    // The complete document is discarded together, via reset().
+  }
+
+  void* reallocate(void* pointer, size_t newSize) override {
+    if (!pointer) return allocate(newSize);
+    if (newSize == 0) return nullptr;
+    auto* header = reinterpret_cast<BlockHeader*>(
+        static_cast<uint8_t*>(pointer) - sizeof(BlockHeader));
+    if (newSize <= header->size) return pointer;
+    void* replacement = allocate(newSize);
+    if (!replacement) return nullptr;
+    memcpy(replacement, pointer, header->size);
+    return replacement;
+  }
+
+ private:
+  struct alignas(std::max_align_t) BlockHeader {
+    size_t size;
+  };
+
+  static constexpr size_t ALIGNMENT = alignof(BlockHeader);
+
+  static constexpr size_t alignUp(size_t value) {
+    return (value + ALIGNMENT - 1U) & ~(ALIGNMENT - 1U);
+  }
+
+  alignas(std::max_align_t) uint8_t storage_[Capacity] = {};
+  size_t used_ = 0;
+};
+
+struct P2PJsonBuffers {
+  void reset() {
+    document.clear();
+    filter.clear();
+    documentAllocator.reset();
+    filterAllocator.reset();
+  }
+
+  FixedJsonArenaAllocator<P2P_JSON_DOCUMENT_BYTES> documentAllocator;
+  FixedJsonArenaAllocator<P2P_JSON_FILTER_BYTES> filterAllocator;
+  JsonDocument document{&documentAllocator};
+  JsonDocument filter{&filterAllocator};
+};
+
+P2PJsonBuffers& p2pJsonBuffers() {
+  static P2PJsonBuffers buffers;
+  return buffers;
+}
 
 struct EewAreaMapping {
   const char* area;
@@ -412,8 +491,10 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
                   static_cast<unsigned>(length));
     return;
   }
-  JsonDocument document;
-  JsonDocument filter;
+  P2PJsonBuffers& buffers = p2pJsonBuffers();
+  buffers.reset();
+  JsonDocument& document = buffers.document;
+  JsonDocument& filter = buffers.filter;
   filter["id"] = true;
   filter["_id"] = true;
   filter["code"] = true;
@@ -439,14 +520,28 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
   const DeserializationError error = deserializeJson(
       document, payload, length, DeserializationOption::Filter(filter));
   if (error) {
-    Serial.printf("P2PQuake JSON parse failed: %s\n", error.c_str());
+    Serial.printf(
+        "P2PQuake JSON parse failed: %s (payload=%u, document=%u/%u, "
+        "filter=%u/%u, free=%u, largest=%u).\n",
+        error.c_str(), static_cast<unsigned>(length),
+        static_cast<unsigned>(buffers.documentAllocator.used()),
+        static_cast<unsigned>(buffers.documentAllocator.capacity()),
+        static_cast<unsigned>(buffers.filterAllocator.used()),
+        static_cast<unsigned>(buffers.filterAllocator.capacity()),
+        static_cast<unsigned>(ESP.getFreeHeap()),
+        static_cast<unsigned>(ESP.getMaxAllocHeap()));
     return;
   }
   const int code = document["code"] | 0;
   if (code != 551 && code != 556) return;
   const char* id = messageId(document);
   if (id[0] == '\0' || isDuplicateId(id)) return;
-  Serial.printf("P2PQuake message received: code=%d id=%s.\n", code, id);
+  Serial.printf(
+      "P2PQuake message received: code=%d id=%s (JSON=%u/%u, filter=%u/%u).\n",
+      code, id, static_cast<unsigned>(buffers.documentAllocator.used()),
+      static_cast<unsigned>(buffers.documentAllocator.capacity()),
+      static_cast<unsigned>(buffers.filterAllocator.used()),
+      static_cast<unsigned>(buffers.filterAllocator.capacity()));
   if (isStale(document["time"] | "")) {
     Serial.printf("P2PQuake stale message ignored: %s\n", id);
     rememberId(id);

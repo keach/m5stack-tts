@@ -68,7 +68,7 @@ class EarthquakeService {
 
   static void eventThunk(WStype_t type, uint8_t* payload, size_t length);
   void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
-  void processMessage(const uint8_t* payload, size_t length);
+  void processMessage(uint8_t* payload, size_t length);
   void processEew(JsonDocument& document);
   void processEarthquake(JsonDocument& document);
   void enqueueEewHistory(JsonDocument& document, const SeismicEvent& event);

@@ -1,13 +1,12 @@
 #include "EarthquakeService.h"
 
 #include <ArduinoJson.h>
-#include <cstddef>
-#include <cstring>
 #include <WiFi.h>
 #include <time.h>
 
-#include "RuntimeDiagnostics.h"
 #include "EarthquakeHistoryService.h"
+#include "P2PJsonBuffer.h"
+#include "RuntimeDiagnostics.h"
 
 namespace {
 constexpr char PRODUCTION_HOST[] = "api.p2pquake.net";
@@ -25,61 +24,8 @@ constexpr unsigned long RECONNECT_DELAYS_MS[] = {1000, 2000, 5000, 10000,
 // Keep the P2PQuake receive document out of the general heap. The Japanese
 // font metrics and TLS allocations can leave the heap fragmented even when
 // there is enough total free memory for a small earthquake message.
-constexpr size_t P2P_JSON_DOCUMENT_BYTES = 12U * 1024U;
-constexpr size_t P2P_JSON_FILTER_BYTES = 2U * 1024U;
-
-// ArduinoJson 7's StaticJsonDocument is retained only as a deprecated
-// compatibility wrapper; it still uses the default heap allocator. This
-// monotonic allocator instead owns a fixed BSS arena. Documents are cleared
-// before reset(), so no JSON value survives an incoming WebSocket event.
-template <size_t Capacity>
-class FixedJsonArenaAllocator final : public ArduinoJson::Allocator {
- public:
-  void reset() { used_ = 0; }
-  size_t used() const { return used_; }
-  static constexpr size_t capacity() { return Capacity; }
-
-  void* allocate(size_t size) override {
-    if (size == 0) size = 1;
-    const size_t headerOffset = alignUp(used_);
-    const size_t dataOffset = headerOffset + sizeof(BlockHeader);
-    if (dataOffset > Capacity || size > Capacity - dataOffset) return nullptr;
-    auto* header = reinterpret_cast<BlockHeader*>(storage_ + headerOffset);
-    header->size = size;
-    used_ = dataOffset + size;
-    return storage_ + dataOffset;
-  }
-
-  void deallocate(void* /*pointer*/) override {
-    // The complete document is discarded together, via reset().
-  }
-
-  void* reallocate(void* pointer, size_t newSize) override {
-    if (!pointer) return allocate(newSize);
-    if (newSize == 0) return nullptr;
-    auto* header = reinterpret_cast<BlockHeader*>(
-        static_cast<uint8_t*>(pointer) - sizeof(BlockHeader));
-    if (newSize <= header->size) return pointer;
-    void* replacement = allocate(newSize);
-    if (!replacement) return nullptr;
-    memcpy(replacement, pointer, header->size);
-    return replacement;
-  }
-
- private:
-  struct alignas(std::max_align_t) BlockHeader {
-    size_t size;
-  };
-
-  static constexpr size_t ALIGNMENT = alignof(BlockHeader);
-
-  static constexpr size_t alignUp(size_t value) {
-    return (value + ALIGNMENT - 1U) & ~(ALIGNMENT - 1U);
-  }
-
-  alignas(std::max_align_t) uint8_t storage_[Capacity] = {};
-  size_t used_ = 0;
-};
+constexpr size_t P2P_JSON_DOCUMENT_BYTES = 24U * 1024U;
+constexpr size_t P2P_JSON_FILTER_BYTES = 8U * 1024U;
 
 struct P2PJsonBuffers {
   void reset() {
@@ -485,7 +431,7 @@ void EarthquakeService::onWebSocketEvent(WStype_t type, uint8_t* payload,
   }
 }
 
-void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
+void EarthquakeService::processMessage(uint8_t* payload, size_t length) {
   if (!payload || length == 0 || length > 24576) {
     Serial.printf("P2PQuake message rejected (length=%u).\n",
                   static_cast<unsigned>(length));
@@ -517,8 +463,22 @@ void EarthquakeService::processMessage(const uint8_t* payload, size_t length) {
   filter["areas"][0]["scaleTo"] = true;
   filter["points"][0]["pref"] = true;
   filter["points"][0]["scale"] = true;
+  if (filter.overflowed()) {
+    Serial.printf(
+        "P2PQuake JSON filter construction failed (filter=%u/%u, free=%u, "
+        "largest=%u).\n",
+        static_cast<unsigned>(buffers.filterAllocator.used()),
+        static_cast<unsigned>(buffers.filterAllocator.capacity()),
+        static_cast<unsigned>(ESP.getFreeHeap()),
+        static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return;
+  }
   const DeserializationError error = deserializeJson(
-      document, payload, length, DeserializationOption::Filter(filter));
+      // WebSocketsClient owns this mutable buffer for the duration of the
+      // callback. Zero-copy parsing avoids duplicating every selected string
+      // into the fixed arena, and no parsed value outlives this function.
+      document, reinterpret_cast<char*>(payload), length,
+      DeserializationOption::Filter(filter));
   if (error) {
     Serial.printf(
         "P2PQuake JSON parse failed: %s (payload=%u, document=%u/%u, "
